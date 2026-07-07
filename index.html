@@ -1,0 +1,1657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Antigravity Dataset Manager</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #070a13;
+      --bg-secondary: #0d1222;
+      --bg-tertiary: #192138;
+      --bg-card: rgba(25,33,56,0.4);
+      --border: rgba(255,255,255,0.06);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #4e5d78;
+      --accent: #6366f1;
+      --accent-light: #818cf8;
+      --accent-grad: linear-gradient(135deg,#6366f1 0%,#a855f7 100%);
+      --accent-glow-bg: rgba(99,102,241,0.10);
+      --success: #10b981;
+      --danger: #ef4444;
+      --select-col: #f59e0b;
+      --select-glow: rgba(245,158,11,0.32);
+      --shadow: 0 10px 30px -10px rgba(0,0,0,0.55);
+      --hover-add: rgba(245,158,11,0.13);
+      --hover-rem: rgba(239,68,68,0.13);
+      --glow: 0 0 24px rgba(99,102,241,0.24);
+    }
+    *,*::before,*::after{box-sizing:border-box}
+    body{margin:0;font-family:'Outfit',sans-serif;background:var(--bg-primary);color:var(--text-primary);overflow-y:scroll}
+
+    /* ── Loader ── */
+    .loader{position:fixed;inset:0;background:var(--bg-primary);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity .3s,visibility .3s}
+    .loader.hidden{opacity:0;visibility:hidden;pointer-events:none}
+    .loader-ring{width:48px;height:48px;border:4px solid rgba(255,255,255,0.06);border-radius:50%;border-top-color:var(--accent);animation:spin 1s cubic-bezier(.5,0,.5,1) infinite;box-shadow:var(--glow)}
+    .loader-txt{margin-top:18px;font-size:1rem;color:var(--text-secondary)}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── Toast ── */
+    .toast{position:fixed;bottom:24px;right:24px;padding:11px 22px;border-radius:8px;color:#fff;font-weight:600;font-size:.9rem;box-shadow:0 8px 24px rgba(0,0,0,.4);transform:translateY(80px);opacity:0;transition:transform .3s cubic-bezier(.34,1.56,.64,1),opacity .3s;z-index:9998}
+    .toast.show{transform:translateY(0);opacity:1}
+    .toast.ok{background:linear-gradient(135deg,#059669,#10b981)}
+    .toast.err{background:linear-gradient(135deg,#dc2626,#ef4444)}
+
+    /* ── Modal ── */
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;z-index:8000;opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+    .modal-bg.show{opacity:1;visibility:visible}
+    .modal-box{background:var(--bg-tertiary);border:1px solid var(--border);border-radius:16px;padding:28px 32px;width:90%;max-width:440px;transform:scale(.94);transition:transform .2s}
+    .modal-bg.show .modal-box{transform:scale(1)}
+    .modal-box h3{margin:0 0 10px;font-size:1.2rem}
+    .modal-box p{margin:0 0 20px;color:var(--text-secondary);font-size:.9rem;line-height:1.5}
+    .modal-box input[type=text]{width:100%;padding:9px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit;font-size:.95rem;margin-bottom:16px;transition:border-color .2s}
+    .modal-box input[type=text]:focus{outline:none;border-color:var(--accent)}
+    .modal-actions{display:flex;gap:10px;justify-content:flex-end}
+
+    /* ── Buttons ── */
+    .btn{padding:7px 17px;border-radius:8px;font-family:inherit;font-weight:600;font-size:.88rem;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:6px;transition:all .18s}
+    .btn-ghost{background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text-secondary)}
+    .btn-ghost:hover{background:rgba(255,255,255,.09);color:var(--text-primary)}
+    .btn-accent{background:var(--accent-grad);color:#fff;box-shadow:var(--glow)}
+    .btn-accent:hover{filter:brightness(1.1)}
+    .btn-danger{background:var(--danger);color:#fff}
+    .btn-danger:hover{filter:brightness(1.1)}
+    .btn:disabled{opacity:.42;cursor:not-allowed;filter:none!important}
+
+    /* ── Views ── */
+    .view{display:none;flex-direction:column;min-height:100vh}
+    .view.active{display:flex}
+
+    /* ══════════════════════════════════════════
+       HOME
+    ══════════════════════════════════════════ */
+    .home-hero{padding:64px 40px 44px;text-align:center;background:linear-gradient(180deg,rgba(99,102,241,.03) 0%,transparent 100%);border-bottom:1px solid var(--border)}
+    .home-hero h1{margin:0;font-size:2.9rem;font-weight:800;letter-spacing:-.02em}
+    .grad{background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .home-hero p{margin:12px 0 0;color:var(--text-secondary);font-size:1rem}
+    .home-main{max-width:1200px;margin:0 auto;padding:38px 40px;width:100%}
+    .sec-bar{display:flex;align-items:center;margin-bottom:24px;gap:12px}
+    .sec-bar h2{margin:0;font-size:1.35rem;font-weight:700}
+    .badge{background:rgba(255,255,255,.05);border:1px solid var(--border);padding:3px 11px;border-radius:99px;font-size:.8rem;font-weight:600;color:var(--text-secondary)}
+    .ds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:26px}
+    .ds-card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;overflow:hidden;cursor:pointer;transition:all .28s cubic-bezier(.4,0,.2,1);box-shadow:var(--shadow)}
+    .ds-card:hover{transform:translateY(-5px);border-color:rgba(99,102,241,.35);box-shadow:0 16px 40px -10px rgba(99,102,241,.22)}
+    .ds-card:hover .ds-img img{transform:scale(1.06)}
+    .ds-img{height:155px;overflow:hidden;position:relative;background:#05070e}
+    .ds-img img{width:100%;height:100%;object-fit:cover;transition:transform .4s}
+    .ds-img svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+    .ds-no-img{height:155px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.85rem;background:#050810}
+    .ds-info{padding:16px;background:rgba(13,18,34,.9);border-top:1px solid var(--border)}
+    .ds-info h3{margin:0 0 6px;font-size:1.1rem;font-weight:700}
+    .ds-cnt{color:var(--text-secondary);font-size:.85rem;display:flex;align-items:center;gap:6px}
+
+    /* ══════════════════════════════════════════
+       EXPLORER
+    ══════════════════════════════════════════ */
+    .explorer-layout{display:flex;flex:1;min-height:0}
+
+    /* ── Sticky header ── */
+    .sticky-hdr{position:sticky;top:0;z-index:200;background:rgba(13,18,34,.93);backdrop-filter:blur(16px);border-bottom:1px solid var(--border)}
+
+    /* Row 1: topbar */
+    .topbar{display:flex;align-items:center;padding:0 20px;height:56px;gap:10px}
+    .back-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-family:inherit;font-weight:600;font-size:.88rem;color:var(--text-primary);transition:all .18s}
+    .back-btn:hover{background:rgba(255,255,255,.09)}
+    .exp-title{font-size:1.15rem;font-weight:700;background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .flex1{flex:1}
+    .srch-wrap{position:relative}
+    .srch-wrap svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:16px;height:16px;fill:var(--text-muted);pointer-events:none}
+    .srch-inp{background:rgba(13,18,34,.6);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);padding:7px 12px 7px 34px;font-family:inherit;font-size:.88rem;width:220px;transition:border-color .2s,box-shadow .2s}
+    .srch-inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 8px rgba(99,102,241,.14)}
+    .tog-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.04);cursor:pointer;font-family:inherit;font-weight:600;font-size:.88rem;color:var(--text-secondary);transition:all .18s}
+    .tog-btn.on-ann{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:var(--glow)}
+    .tog-btn.on-sel{background:rgba(245,158,11,.14);border-color:var(--select-col);color:var(--select-col)}
+
+    /* Row 2: selection bar */
+    .sel-bar{display:none;align-items:center;gap:8px;padding:8px 20px;border-top:1px solid rgba(245,158,11,.2);background:rgba(245,158,11,.05)}
+    .sel-bar.show{display:flex}
+    .sel-lbl{font-size:.88rem;font-weight:700;color:var(--select-col)}
+
+    /* Row 3: filters */
+    .filters-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 20px;border-top:1px solid var(--border)}
+    .filters-label{font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+    .pill{padding:4px 13px;border-radius:20px;border:1px solid var(--border);background:rgba(255,255,255,.02);color:var(--text-secondary);cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+    .pill:hover{background:rgba(255,255,255,.07)}
+    .pill.active{background:var(--accent-glow-bg);border-color:var(--accent);color:var(--accent-light)}
+    .pill-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+    /* ── Sidebar nav ── */
+    .side-nav{width:190px;background:rgba(13,18,34,.3);border-right:1px solid var(--border);padding:14px 0;display:flex;flex-direction:column;gap:2px;position:sticky;top:0;height:100vh;overflow-y:auto;flex-shrink:0}
+    .nav-item{display:flex;align-items:center;gap:9px;padding:10px 18px;font-size:.85rem;font-weight:700;letter-spacing:.04em;color:var(--text-muted);cursor:pointer;border:none;background:none;font-family:inherit;text-align:left;width:100%;transition:all .15s;border-left:3px solid transparent}
+    .nav-item:hover{color:var(--text-secondary);background:rgba(255,255,255,.03)}
+    .nav-item.active{color:var(--accent-light);border-left-color:var(--accent);background:rgba(99,102,241,.07)}
+    .nav-item svg{width:15px;height:15px;fill:currentColor;flex-shrink:0}
+
+    /* ── Main content ── */
+    .main-content{flex:1;display:flex;flex-direction:column;min-width:0}
+
+    /* distribution strip */
+    .dist-strip{padding:16px 24px 4px;display:flex;flex-wrap:wrap;gap:12px}
+    .dist-item{display:flex;flex-direction:column;gap:4px;min-width:90px;flex:1}
+    .dist-hdr{display:flex;justify-content:space-between;font-size:.76rem;font-weight:600}
+    .dist-name{display:flex;align-items:center;gap:5px}
+    .dist-dot{width:7px;height:7px;border-radius:50%}
+    .dist-cnt{color:var(--text-muted)}
+    .dist-bg{height:5px;background:rgba(255,255,255,.05);border-radius:99px;overflow:hidden}
+    .dist-fill{height:100%;border-radius:99px}
+
+    /* stats row */
+    .stats-row{padding:10px 24px;display:flex;gap:10px}
+    .stat-chip{background:rgba(13,18,34,.6);border:1px solid var(--border);border-radius:8px;padding:8px 14px;text-align:center;min-width:76px}
+    .stat-n{font-size:1.1rem;font-weight:700}
+    .stat-l{font-size:.68rem;color:var(--text-muted);font-weight:600;margin-top:2px}
+
+    /* grid */
+    .grid-wrap{padding:14px 24px 32px}
+    .img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:18px}
+
+    /* image card */
+    .img-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:all .24s cubic-bezier(.25,.8,.25,1);cursor:default;position:relative}
+    .img-card:hover{border-color:rgba(99,102,241,.3);box-shadow:0 10px 28px -8px rgba(99,102,241,.2);transform:translateY(-3px)}
+    .img-card.selected{border-color:var(--select-col)!important;box-shadow:0 0 0 2px var(--select-glow),0 8px 24px -6px var(--select-glow)!important}
+    .select-mode .img-card{cursor:pointer}
+    .img-thumb{position:relative;line-height:0;background:#05070e;overflow:hidden}
+    .img-thumb img{width:100%;height:auto;display:block;transition:transform .35s}
+    .img-card:not(.selected):hover .img-thumb img{transform:scale(1.03)}
+    .img-card.selected .img-thumb img{transform:none}
+    .ann-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+    .chk{position:absolute;top:8px;right:8px;width:20px;height:20px;border-radius:5px;border:2px solid rgba(255,255,255,.35);background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;transition:all .15s}
+    .select-mode .chk{display:flex}
+    .img-card.selected .chk{border-color:var(--success);background:var(--success)}
+    .chk svg{width:12px;height:12px;fill:#fff;opacity:0}
+    .img-card.selected .chk svg{opacity:1}
+    .img-info{padding:10px 12px;border-top:1px solid var(--border);background:rgba(13,18,34,.4)}
+    .img-fn{font-size:.79rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:5px}
+    .img-meta{display:flex;align-items:center;justify-content:space-between;gap:6px}
+    .img-idx{font-size:.68rem;font-weight:700;color:var(--text-muted)}
+    .img-tags{display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;max-width:70%}
+    .img-tag{font-size:.63rem;font-weight:700;padding:2px 5px;border-radius:4px;white-space:nowrap}
+    .img-tag.no-lbl{background:rgba(255,255,255,.03);color:var(--text-muted);border:1px solid var(--border)}
+
+    /* separator */
+    .sep{grid-column:1/-1;display:flex;align-items:center;margin:26px 0 4px;color:var(--text-muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em}
+    .sep span{padding:0 13px;background:var(--bg-primary);white-space:nowrap}
+    .sep::before,.sep::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,transparent,rgba(99,102,241,.25),transparent)}
+
+    /* sentinel */
+    .sentinel{grid-column:1/-1;height:46px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text-muted);font-size:.84rem;font-weight:500}
+
+    /* ══════════════════════════════════════════
+       CLASS SETTINGS PAGE
+    ══════════════════════════════════════════ */
+    .settings-page{padding:28px 30px;max-width:620px}
+    .settings-page h2{margin:0 0 6px;font-size:1.4rem;font-weight:800}
+    .settings-page p{margin:0 0 22px;color:var(--text-secondary);font-size:.9rem}
+    .cls-list{display:flex;flex-direction:column;gap:10px;margin-bottom:22px}
+    .cls-row{display:flex;align-items:center;gap:10px;background:rgba(13,18,34,.5);border:1px solid var(--border);border-radius:8px;padding:8px 14px}
+    .cls-idx{font-size:.77rem;font-weight:700;color:var(--text-muted);width:20px;text-align:center}
+    .cls-name-inp{flex:1;background:transparent;border:none;border-bottom:1px solid transparent;color:var(--text-primary);font-family:inherit;font-size:.9rem;font-weight:500;padding:2px 0;transition:border-color .2s}
+    .cls-name-inp:focus{outline:none;border-color:var(--accent)}
+    .col-wrap{position:relative;width:24px;height:24px;border-radius:50%;overflow:hidden;border:1px solid var(--border);cursor:pointer}
+    .col-inp{position:absolute;top:-4px;left:-4px;width:32px;height:32px;border:none;background:none;cursor:pointer}
+    .save-btn{background:var(--accent-grad);border:none;color:#fff;width:100%;padding:12px;border-radius:8px;font-family:inherit;font-weight:700;font-size:.95rem;cursor:pointer;box-shadow:var(--glow);display:flex;align-items:center;justify-content:center;gap:8px;transition:all .2s}
+    .save-btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+    .save-btn:disabled{background:var(--bg-tertiary)!important;color:var(--text-muted)!important;cursor:not-allowed;transform:none;box-shadow:none;filter:none}
+
+    /* ══════════════════════════════════════════
+       ANNOTATION PAGE placeholder
+    ══════════════════════════════════════════ */
+    .ann-ph{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--text-muted);text-align:center;padding:40px}
+    .ann-ph svg{width:54px;height:54px;fill:var(--text-muted);opacity:.35}
+    .ann-ph h3{margin:0;font-size:1.15rem;color:var(--text-secondary)}
+    .ann-ph p{margin:0;font-size:.9rem;max-width:360px;line-height:1.55}
+
+    /* Dropdown Styles */
+    .dropdown-wrap {
+      position: relative;
+      display: inline-block;
+    }
+    .dropdown-menu {
+      display: none;
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 6px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      min-width: 160px;
+      box-shadow: var(--shadow);
+      z-index: 300;
+    }
+    .dropdown-menu.show {
+      display: block;
+    }
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+      font-size: 0.88rem;
+      cursor: pointer;
+      color: var(--text-secondary);
+      transition: color 0.15s;
+      user-select: none;
+    }
+    .dropdown-item:hover {
+      color: var(--text-primary);
+    }
+    .dropdown-item input[type=checkbox] {
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loader -->
+<div id="loader" class="loader">
+  <div class="loader-ring"></div>
+  <div class="loader-txt" id="loader-txt">Scanning datasets…</div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<!-- Confirm Modal -->
+<div id="confirm-modal" class="modal-bg">
+  <div class="modal-box">
+    <h3 id="confirm-title">Konfirmasi</h3>
+    <p id="confirm-body">Apakah Anda yakin?</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('confirm-modal')">Batal</button>
+      <button class="btn btn-danger" id="confirm-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="rename-modal" class="modal-bg">
+  <div class="modal-box">
+    <h3 id="rename-title">Rename Image</h3>
+    <p id="rename-desc">Masukkan nama baru (ekstensi dipertahankan otomatis).</p>
+    <input type="text" id="rename-inp" placeholder="nama_file_baru">
+    <div id="rename-preview" style="font-size:.8rem;color:var(--text-muted);margin-bottom:14px;line-height:1.6;display:none"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('rename-modal')">Batal</button>
+      <button class="btn btn-ghost" id="rename-add">Add Name</button>
+      <button class="btn btn-accent" id="rename-ok">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- Image Tags Modal -->
+<div id="image-tags-modal" class="modal-bg">
+  <div class="modal-box">
+    <h3>Kelola Tags Gambar</h3>
+    <p>Pilih tags yang ingin diterapkan pada gambar yang dipilih.</p>
+    <div id="image-tags-list" style="max-height:200px;overflow-y:auto;margin-bottom:20px;border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:4px">
+      <!-- checkboxes will be populated dynamically -->
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('image-tags-modal')">Batal</button>
+      <button class="btn btn-accent" id="image-tags-save">Simpan Tags</button>
+    </div>
+  </div>
+</div>
+
+<!-- Progress Modal -->
+<div id="progress-modal" class="modal-bg" style="z-index:9000">
+  <div class="modal-box" style="text-align:center">
+    <h3 id="progress-title">Memproses…</h3>
+    <div style="margin:20px 0">
+      <div class="loader-ring" style="margin:0 auto;width:36px;height:36px"></div>
+    </div>
+    <div style="font-size:1.1rem;font-weight:700;margin-bottom:8px" id="progress-percent">0%</div>
+    <div style="font-size:0.85rem;color:var(--text-secondary)" id="progress-desc">Mengupdate file label...</div>
+  </div>
+</div>
+
+<!-- ═══════════════ HOME ═══════════════ -->
+<div id="home-view" class="view active">
+  <div class="home-hero">
+    <h1>Antigravity <span class="grad">Dataset Manager</span></h1>
+    <p>YOLO segment dataset — visualize, filter &amp; manage.</p>
+  </div>
+  <main class="home-main">
+    <div class="sec-bar">
+      <h2>Datasets</h2>
+      <span class="badge" id="ds-badge">0</span>
+    </div>
+    <div class="ds-grid" id="ds-grid"></div>
+  </main>
+</div>
+
+<!-- ═══════════════ EXPLORER ═══════════════ -->
+<div id="explorer-view" class="view">
+
+  <!-- Sticky header -->
+  <div class="sticky-hdr">
+    <!-- Row 1: topbar -->
+    <div class="topbar">
+      <button class="back-btn" onclick="showHome()">
+        <svg viewBox="0 0 24 24" style="width:17px;height:17px;fill:currentColor"><path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/></svg>
+        Back
+      </button>
+      <span class="exp-title" id="exp-title"></span>
+      <div class="flex1"></div>
+      <!-- search -->
+      <div class="srch-wrap" id="hdr-srch-wrap">
+        <svg viewBox="0 0 24 24"><path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/></svg>
+        <input class="srch-inp" id="hdr-srch" placeholder="Cari filename…" oninput="applyFilters()">
+      </div>
+      <!-- tags dropdown filter -->
+      <div class="dropdown-wrap" id="hdr-tags-filter-wrap" style="display:none">
+        <button class="tog-btn" id="tags-filter-btn" onclick="toggleTagsFilterDropdown(event)">
+          <span>TAGS ▾</span>
+        </button>
+        <div class="dropdown-menu" id="tags-filter-menu"></div>
+      </div>
+      <!-- annotation toggle -->
+      <button class="tog-btn on-ann" id="ann-toggle" onclick="toggleAnn()">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z"/></svg>
+        Annotations
+      </button>
+      <!-- select toggle -->
+      <button class="tog-btn" id="sel-toggle" onclick="toggleSel()">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M9,16.17L4.83,12L3.41,13.41L9,19L21,7L19.59,5.59L9,16.17Z"/></svg>
+        Select
+      </button>
+    </div>
+
+    <!-- Row 2: sel action bar -->
+    <div class="sel-bar" id="sel-bar">
+      <span class="sel-lbl" id="sel-lbl">0 dipilih</span>
+      <div class="flex1"></div>
+      <button class="btn btn-ghost" onclick="doAnnotate()">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/></svg>
+        Annotate
+      </button>
+      <button class="btn btn-ghost" id="rename-btn" onclick="doRename()">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M5,3C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V12H19V19H5V5H12V3H5M17.78,4C17.61,4 17.43,4.07 17.3,4.2L16.08,5.41L18.58,7.91L19.8,6.7C20.07,6.43 20.07,5.96 19.8,5.69L18.31,4.2C18.17,4.07 18,4 17.78,4M15.37,6.12L8,13.5V16H10.5L17.87,8.62L15.37,6.12Z"/></svg>
+        Rename
+      </button>
+      <button class="btn btn-ghost" id="tags-btn" onclick="doManageImageTags()">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M5.5,9A1.5,1.5 0 0,0 7,7.5A1.5,1.5 0 0,0 5.5,6A1.5,1.5 0 0,0 4,7.5A1.5,1.5 0 0,0 5.5,9M17.41,11.58C17.77,11.94 18,12.44 18,13C18,13.55 17.78,14.05 17.41,14.41L12.41,19.41C12.05,19.77 11.55,20 11,20C10.45,20 9.95,19.78 9.58,19.41L2.59,12.42C2.22,12.05 2,11.55 2,11V4A2,2 0 0,1 4,2H11C11.55,2 12.05,2.22 12.41,2.59L19.41,9.59C19.78,9.95 20,10.45 20,11C20,11.55 19.78,12.05 19.41,12.41L17.41,11.58Z"/></svg>
+        Tags
+      </button>
+      <button class="btn btn-danger" onclick="doDelete()">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+        Delete
+      </button>
+    </div>
+
+    <!-- Row 3: filter pills -->
+    <div class="filters-bar" id="filters-bar">
+      <span class="filters-label">Filter:</span>
+      <div id="pills-wrap"></div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="explorer-layout">
+
+    <!-- Sidebar -->
+    <nav class="side-nav">
+      <button class="nav-item active" id="nav-dataset" onclick="switchPage('dataset')">
+        <svg viewBox="0 0 24 24"><path d="M19,20H5V8H19M19,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6Z"/></svg>
+        DATASET
+      </button>
+      <button class="nav-item" id="nav-class" onclick="switchPage('class')">
+        <svg viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>
+        CLASS SETTINGS
+      </button>
+      <button class="nav-item" id="nav-annotation" onclick="switchPage('annotation')">
+        <svg viewBox="0 0 24 24"><path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/></svg>
+        ANNOTATION
+      </button>
+    </nav>
+
+    <!-- Pages -->
+    <div class="main-content">
+
+      <!-- DATASET page -->
+      <div id="page-dataset">
+        <div class="stats-row" id="ds-stats"></div>
+        <div class="dist-strip" id="ds-dist"></div>
+        <div class="grid-wrap">
+          <div class="img-grid" id="ds-grid-inner">
+            <div class="sentinel" id="ds-sentinel">
+              <span class="spinner" id="ds-spin" style="display:none"></span>
+              <span id="ds-sent-txt">Memuat gambar…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CLASS SETTINGS page -->
+      <div id="page-class" style="display:none">
+        <div class="settings-page" style="max-width: 650px">
+          <h2>Class Settings</h2>
+          <p>Edit nama dan warna class, lalu simpan ke <code>data.yaml</code>.</p>
+          <div class="cls-list" id="cls-list"></div>
+          
+          <div style="display:flex;gap:12px;margin-bottom:28px">
+            <button class="btn btn-ghost" onclick="addNewClassRow()" style="flex:1;justify-content:center">+ Tambah Class</button>
+            <button class="save-btn" id="save-btn" onclick="saveClasses()" style="flex:1">Simpan YAML Config</button>
+          </div>
+          
+          <!-- Tags Manager section -->
+          <div class="tags-manager" style="margin-top:40px;border-top:1px solid var(--border);padding-top:28px">
+            <h2>Tags Settings</h2>
+            <p>Kelola tags global untuk anotasi tambahan gambar (disimpan di database).</p>
+            
+            <div style="display:flex;gap:10px;margin-bottom:20px">
+              <input type="text" id="new-tag-inp" placeholder="Nama tag baru..." style="flex:1;padding:9px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit">
+              <button class="btn btn-accent" onclick="addNewTag()">Tambah Tag</button>
+            </div>
+            
+            <div class="cls-list" id="tags-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ANNOTATION page -->
+      <div id="page-annotation" style="display:none;flex:1;flex-direction:column">
+        <div class="stats-row" id="ann-stats"></div>
+        <div class="dist-strip" id="ann-dist"></div>
+        <div class="grid-wrap">
+          <div class="img-grid" id="ann-grid-inner">
+            <div class="sentinel" id="ann-sentinel">
+              <span class="spinner" id="ann-spin" style="display:none"></span>
+              <span id="ann-sent-txt">Memuat gambar annotate…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════
+let datasets = [];
+let ds = null;           // { name, classes, cmap, images }
+let annData = null;
+let filteredImgs = [];
+let filteredAnnImgs = [];
+let loadedMain = 0, loadedAnn = 0;
+const BATCH = 40;
+const clsFilters = new Set();
+let showAnn = true;
+let selectMode = false;
+const selected = new Set();
+let currentPage = 'dataset';
+let obMain, obAnn;
+
+// ═══════════════════════════════════════════
+// Loader / Toast / Modal
+// ═══════════════════════════════════════════
+function showLoader(on, txt = 'Memuat…') {
+  document.getElementById('loader-txt').textContent = txt;
+  document.getElementById('loader').classList.toggle('hidden', !on);
+}
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3000);
+}
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+// ═══════════════════════════════════════════
+// URL ROUTING
+// ═══════════════════════════════════════════
+function navigate(path, replace = false) {
+  if (replace) history.replaceState({}, '', path);
+  else         history.pushState({}, '', path);
+}
+
+window.addEventListener('popstate', () => restoreFromURL(false));
+
+function restoreFromURL(initial = true) {
+  const parts = window.location.pathname.replace(/^\//, '').split('/');
+  const dsName = parts[0] ? decodeURIComponent(parts[0]) : '';
+  const page   = parts[1] || 'dataset';
+  if (!dsName || dsName === '') {
+    if (!initial) { selected.clear(); selectMode = false; ds = null; annData = null; switchView('home-view'); renderHome(); }
+    return;
+  }
+  if (ds && ds.name === dsName) {
+    switchPage(page, false);  // already loaded, just switch tab
+  } else {
+    loadDataset(dsName, page, false); // load then go to page
+  }
+}
+
+// ═══════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+  setupObservers();
+  refreshTagsFilterDropdown();
+
+  // Close dropdown on click outside
+  window.addEventListener('click', (e) => {
+    const wrap = document.getElementById('hdr-tags-filter-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      document.getElementById('tags-filter-menu').classList.remove('show');
+    }
+  });
+
+  // Always fetch datasets list first (needed even if we deep-link into a dataset)
+  fetch('/api/datasets')
+    .then(r => r.json())
+    .then(d => {
+      datasets = d;
+      renderHome();
+      // Now restore from URL (may trigger loadDataset which needs datasets)
+      restoreFromURL(true);
+    })
+    .catch(() => toast('Gagal memuat dataset list', 'err'))
+    .finally(() => showLoader(false));
+  showLoader(true, 'Scanning datasets…');
+});
+
+function fetchDatasets() {
+  showLoader(true, 'Scanning datasets…');
+  fetch('/api/datasets')
+    .then(r => r.json())
+    .then(d => { datasets = d; renderHome(); showLoader(false); })
+    .catch(() => { showLoader(false); toast('Gagal memuat dataset', 'err'); });
+}
+
+function fetchDatasetsOnly() {
+  fetch('/api/datasets').then(r => r.json()).then(d => { datasets = d; renderHome(); }).catch(() => {});
+}
+
+// ═══════════════════════════════════════════
+// HOME
+// ═══════════════════════════════════════════
+function renderHome() {
+  document.getElementById('ds-badge').textContent = datasets.length;
+  const grid = document.getElementById('ds-grid');
+  grid.innerHTML = '';
+  if (!datasets.length) {
+    grid.innerHTML = `<div style="grid-column:1/-1;padding:40px;text-align:center;color:var(--text-muted);border:1px dashed var(--border);border-radius:12px"><h3 style="margin-top:0">Belum ada dataset</h3><p>Buat folder di <code>dataset/</code> dengan subfolder <code>images/</code> dan <code>labels/</code>.</p></div>`;
+    return;
+  }
+  datasets.forEach(d => grid.appendChild(makeDsCard(d)));
+}
+
+function makeDsCard(d) {
+  const card = document.createElement('div');
+  card.className = 'ds-card';
+  card.onclick = () => loadDataset(d.name);
+  const cmap = buildCmap(d.classes);
+  let thumb;
+  if (d.preview) {
+    const polys = (d.preview.annotations || []).map(a => {
+      const pts = a.points.map(p => `${p[0]},${p[1]}`).join(' ');
+      const col = cmap[a.class_id]?.color || '#f00';
+      return `<polygon points="${pts}" fill="${col}" fill-opacity=".33" stroke="${col}" stroke-width=".005"/>`;
+    }).join('');
+    thumb = `<div class="ds-img"><img src="/dataset/${enc(d.name)}/images/${enc(d.preview.filename)}"><svg viewBox="0 0 1 1" preserveAspectRatio="none">${polys}</svg></div>`;
+  } else {
+    thumb = `<div class="ds-no-img">No images</div>`;
+  }
+  card.innerHTML = `${thumb}
+    <div class="ds-info">
+      <h3>${esc(d.name)}</h3>
+      <div class="ds-cnt">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M19,20H5V8H19M19,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6Z"/></svg>
+        ${d.total_images.toLocaleString()} images
+      </div>
+    </div>`;
+  return card;
+}
+
+function showHome() {
+  selected.clear(); selectMode = false;
+  ds = null; annData = null;
+  navigate('/');
+  switchView('home-view');
+  fetchDatasetsOnly();
+}
+
+// ═══════════════════════════════════════════
+// LOAD DATASET
+// ═══════════════════════════════════════════
+function loadDataset(name, targetPage = 'dataset', pushNav = true) {
+  showLoader(true, `Loading "${name}"…`);
+  
+  Promise.all([
+    fetch(`/api/dataset/${enc(name)}`).then(r => r.json()),
+    fetch(`/api/dataset/${enc(name)}/tags`).then(r => r.json())
+  ])
+  .then(([data, tagsMapping]) => {
+    const images = (data.images || []).map(img => {
+      return {
+        ...img,
+        tags: tagsMapping[img.filename] || []
+      };
+    });
+    
+    ds = { name, classes: data.classes, cmap: buildCmap(data.classes), images: images };
+    annData = null;
+    selected.clear(); selectMode = false;
+    clsFilters.clear();
+    activeTagsFilter.clear(); // Reset tag filter when switching dataset
+    document.getElementById('hdr-srch').value = '';
+    document.getElementById('exp-title').textContent = name;
+    buildPills();
+    buildClassEditor();
+    refreshTagsFilterDropdown();
+    renderStats(ds.images, 'ds-stats', true);
+    renderDist(ds.images, ds.classes, 'ds-dist');
+    filteredImgs = [...ds.images];
+    clearGrid('ds-grid-inner', 'ds-sentinel');
+    loadedMain = 0;
+    syncSelUI();
+    switchView('explorer-view');
+    switchPage(targetPage, pushNav);
+    showLoader(false);
+    loadBatchMain();
+  })
+  .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+}
+
+// ═══════════════════════════════════════════
+// PAGE SWITCH
+// ═══════════════════════════════════════════
+function switchPage(p, pushNav = true) {
+  currentPage = p;
+  ['dataset','class','annotation'].forEach(n => {
+    document.getElementById(`nav-${n}`).classList.toggle('active', n === p);
+  });
+  document.getElementById('page-dataset').style.display   = p === 'dataset'    ? '' : 'none';
+  document.getElementById('page-class').style.display     = p === 'class'      ? '' : 'none';
+  document.getElementById('page-annotation').style.display= p === 'annotation' ? 'flex' : 'none';
+  const isGrid = p === 'dataset' || p === 'annotation';
+  document.getElementById('hdr-srch-wrap').style.display = isGrid ? '' : 'none';
+  document.getElementById('hdr-tags-filter-wrap').style.display = isGrid ? '' : 'none';
+  document.getElementById('ann-toggle').style.display    = isGrid ? '' : 'none';
+  document.getElementById('sel-toggle').style.display    = isGrid ? '' : 'none';
+  document.getElementById('filters-bar').style.display   = isGrid ? '' : 'none';
+  if (!isGrid) { document.getElementById('sel-bar').classList.remove('show'); }
+  
+  if (p === 'class') {
+    loadTagsManager();
+  }
+  
+  // Update URL
+  if (ds) navigate(`/${enc(ds.name)}/${p}`, !pushNav);
+  if (p === 'annotation' && ds && !annData) loadAnnotatePage();
+}
+
+function loadAnnotatePage() {
+  showLoader(true, 'Memuat folder annotate…');
+  fetch(`/api/dataset/${enc(ds.name)}/annotate`)
+    .then(r => r.json())
+    .then(data => {
+      annData = data;
+      renderStats(data.images, 'ann-stats', false);
+      renderDist(data.images, ds.classes, 'ann-dist');
+      filteredAnnImgs = [...data.images];
+      clearGrid('ann-grid-inner', 'ann-sentinel');
+      loadedAnn = 0;
+      showLoader(false);
+      loadBatchAnn();
+    })
+    .catch(() => { showLoader(false); toast('Gagal memuat annotate', 'err'); });
+}
+
+// ═══════════════════════════════════════════
+// STATS + DISTRIBUTION
+// ═══════════════════════════════════════════
+function renderStats(images, containerId, showUnlabelled) {
+  const total    = images.length;
+  const labelled = images.filter(i => i.annotations.length > 0).length;
+  let html = `
+    <div class="stat-chip"><div class="stat-n">${total.toLocaleString()}</div><div class="stat-l">Total</div></div>
+    <div class="stat-chip"><div class="stat-n">${labelled.toLocaleString()}</div><div class="stat-l">Labelled</div></div>`;
+  if (showUnlabelled)
+    html += `<div class="stat-chip"><div class="stat-n">${(total - labelled).toLocaleString()}</div><div class="stat-l">Unlabelled</div></div>`;
+  document.getElementById(containerId).innerHTML = html;
+}
+
+function renderDist(images, classes, containerId) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  if (!classes.names.length) return;
+  const cnt = {};
+  classes.names.forEach((_, i) => cnt[i] = 0);
+  images.forEach(img => img.annotations.forEach(a => { cnt[a.class_id] = (cnt[a.class_id]||0)+1; }));
+  const max = Math.max(1, ...Object.values(cnt));
+  classes.names.forEach((name, i) => {
+    const col = classes.color[i] || '#f00';
+    const c   = cnt[i] || 0;
+    const pct = (c / max * 100).toFixed(1);
+    const div = document.createElement('div');
+    div.className = 'dist-item';
+    div.innerHTML = `
+      <div class="dist-hdr">
+        <div class="dist-name"><span class="dist-dot" style="background:${col}"></span><span>${esc(name)}</span></div>
+        <span class="dist-cnt">${c.toLocaleString()}</span>
+      </div>
+      <div class="dist-bg"><div class="dist-fill" style="width:${pct}%;background:${col}"></div></div>`;
+    el.appendChild(div);
+  });
+}
+
+// ═══════════════════════════════════════════
+// FILTER PILLS
+// ═══════════════════════════════════════════
+function buildPills() {
+  const wrap = document.getElementById('pills-wrap');
+  if (!ds) { wrap.innerHTML = ''; return; }
+  let html = `<button class="pill${clsFilters.size === 0 ? ' active' : ''}" onclick="toggleFilter('all')">Semua</button>`;
+  ds.classes.names.forEach((name, i) => {
+    const col = ds.classes.color[i] || '#f00';
+    const on  = clsFilters.has(i);
+    html += `<button class="pill${on ? ' active' : ''}" onclick="toggleFilter(${i})" style="${on ? `background:${col}20;border-color:${col};color:${col}` : ''}">
+      <span class="pill-dot" style="background:${col}"></span>${esc(name)}</button>`;
+  });
+  wrap.innerHTML = html;
+}
+
+function toggleFilter(id) {
+  if (id === 'all') clsFilters.clear();
+  else clsFilters.has(id) ? clsFilters.delete(id) : clsFilters.add(id);
+  buildPills();
+  applyFilters();
+}
+
+function applyFilters() {
+  if (!ds) return;
+  let imgs = ds.images;
+  
+  if (clsFilters.size > 0) {
+    imgs = imgs.filter(img => img.annotations.some(a => clsFilters.has(a.class_id)));
+  }
+  
+  if (activeTagsFilter.size > 0) {
+    imgs = imgs.filter(img => (img.tags || []).some(t => activeTagsFilter.has(t)));
+  }
+  
+  const q = document.getElementById('hdr-srch').value.toLowerCase().trim();
+  if (q) {
+    imgs = imgs.filter(img => img.filename.toLowerCase().includes(q));
+  }
+  
+  filteredImgs = imgs;
+  clearGrid('ds-grid-inner', 'ds-sentinel');
+  loadedMain = 0;
+  loadBatchMain();
+}
+
+// ═══════════════════════════════════════════
+// ANNOTATION TOGGLE
+// ═══════════════════════════════════════════
+function toggleAnn() {
+  showAnn = !showAnn;
+  document.querySelectorAll('.ann-overlay').forEach(el => el.style.display = showAnn ? '' : 'none');
+  document.getElementById('ann-toggle').classList.toggle('on-ann', showAnn);
+}
+
+// ═══════════════════════════════════════════
+// SELECT MODE
+// ═══════════════════════════════════════════
+// drag-select state
+let dragSelecting  = false;   // true while LMB held in select mode
+let dragIntent     = null;    // 'add' | 'remove' — locked at drag start
+let dragStartCard  = null;    // card where drag began
+let dragMoved      = false;   // true once mouse enters a DIFFERENT card
+let lastClickedFn  = null;    // for shift-range
+
+function toggleSel() {
+  selectMode = !selectMode;
+  if (!selectMode) { selected.clear(); lastClickedFn = null; }
+  syncSelUI();
+}
+
+function syncSelUI() {
+  const btn = document.getElementById('sel-toggle');
+  btn.classList.toggle('on-sel', selectMode);
+  document.getElementById('ds-grid-inner').classList.toggle('select-mode', selectMode);
+  document.getElementById('ann-grid-inner').classList.toggle('select-mode', selectMode);
+  document.querySelectorAll('.img-card').forEach(c => {
+    c.classList.toggle('selected', selected.has(c.dataset.fn));
+  });
+  updateSelBar();
+}
+
+function updateSelBar() {
+  const hasAny = selectMode && selected.size > 0;
+  document.getElementById('sel-bar').classList.toggle('show', hasAny);
+  document.getElementById('sel-lbl').textContent = `${selected.size} dipilih`;
+  // Rename works for both single (rename file) and multi (batch rename with base name)
+  document.getElementById('rename-btn').disabled = selected.size === 0;
+}
+
+// Called by card onclick
+function toggleCard(card, e) {
+  if (!selectMode) return;
+  // If a real drag just finished, this onclick is the artifact of releasing the mouse
+  // on the starting card — skip it; drag already handled the state.
+  if (dragMoved) { dragMoved = false; return; }
+  e && e.preventDefault();
+
+  // ── SHIFT+click: select range ──────────────
+  if (e && e.shiftKey && lastClickedFn) {
+    const cards  = [...document.querySelectorAll('.img-card')];
+    const idxA   = cards.findIndex(c => c.dataset.fn === lastClickedFn);
+    const idxB   = cards.indexOf(card);
+    if (idxA !== -1 && idxB !== -1) {
+      const lo = Math.min(idxA, idxB), hi = Math.max(idxA, idxB);
+      for (let i = lo; i <= hi; i++) {
+        selected.add(cards[i].dataset.fn);
+        cards[i].classList.add('selected');
+      }
+      updateSelBar();
+      return;
+    }
+  }
+
+  // ── Normal single-click toggle ──────────────
+  const fn = card.dataset.fn;
+  if (selected.has(fn)) { selected.delete(fn); card.classList.remove('selected'); }
+  else                  { selected.add(fn);    card.classList.add('selected'); }
+  lastClickedFn = fn;
+  updateSelBar();
+}
+
+// ── Drag-select ───────────────────────────────
+function setupDragSelect() {
+  document.addEventListener('mouseup', () => {
+    dragSelecting = false;
+    dragIntent    = null;
+    dragStartCard = null;
+    // NOTE: we do NOT reset dragMoved here — toggleCard needs it on the
+    // upcoming onclick event (which fires after mouseup on same element).
+  });
+  document.addEventListener('mouseleave', () => {
+    dragSelecting = false; dragIntent = null; dragStartCard = null; dragMoved = false;
+  });
+}
+
+// mousedown on a card — lock drag intent but DON'T toggle yet.
+// The actual toggle happens either:
+//   a) in onCardEnter when mouse moves to another card (drag), or
+//   b) in toggleCard via onclick (single click).
+function startDrag(card, e) {
+  if (!selectMode || e.shiftKey || e.button !== 0) return;
+  dragSelecting = true;
+  dragMoved     = false;
+  dragStartCard = card;
+  dragIntent    = selected.has(card.dataset.fn) ? 'remove' : 'add';
+  e.preventDefault();   // stop text-selection while dragging
+}
+
+// mouseenter on a card
+function onCardEnter(card) {
+  if (!selectMode) return;
+  if (dragSelecting) {
+    card.style.background = '';   // clear hover tint when dragging
+    if (card === dragStartCard) return;   // re-entered start card, skip
+    if (!dragMoved) {
+      // First time we enter a DIFFERENT card → also apply to the start card
+      dragMoved = true;
+      applyDragIntent(dragStartCard);
+    }
+    applyDragIntent(card);
+  } else {
+    // Hover preview: yellow = will select, red = will deselect
+    card.style.background = selected.has(card.dataset.fn)
+      ? 'var(--hover-rem)'
+      : 'var(--hover-add)';
+  }
+}
+
+function onCardLeave(card) {
+  card.style.background = '';
+}
+
+function applyDragIntent(card) {
+  if (!card) return;
+  const fn = card.dataset.fn;
+  if (dragIntent === 'add') {
+    selected.add(fn); card.classList.add('selected');
+  } else {
+    selected.delete(fn); card.classList.remove('selected');
+  }
+  lastClickedFn = fn;
+  updateSelBar();
+}
+
+// ═══════════════════════════════════════════
+// IMAGE GRID
+// ═══════════════════════════════════════════
+function clearGrid(gridId, sentId) {
+  const grid = document.getElementById(gridId);
+  grid.querySelectorAll('.img-card,.sep').forEach(e => e.remove());
+  document.getElementById(sentId).style.display = '';
+}
+
+function makeCard(imgData, index, urlPrefix) {
+  const card = document.createElement('div');
+  card.className = 'img-card';
+  card.dataset.fn = imgData.filename;
+  card.onclick     = (e) => toggleCard(card, e);
+  card.onmousedown = (e) => startDrag(card, e);
+  card.onmouseenter= ()  => onCardEnter(card);
+  card.onmouseleave= ()  => onCardLeave(card);
+  card.draggable = false;
+  if (selectMode && selected.has(imgData.filename)) card.classList.add('selected');
+
+  const polys = (imgData.annotations || []).map(a => {
+    const info = ds.cmap[a.class_id] || { name:`Class ${a.class_id}`, color:'#f00' };
+    const pts  = a.points.map(p => `${p[0]},${p[1]}`).join(' ');
+    return `<polygon points="${pts}" fill="${info.color}" fill-opacity=".28" stroke="${info.color}" stroke-width=".004"><title>${esc(info.name)}</title></polygon>`;
+  }).join('');
+
+  const classBadges = [...new Set((imgData.annotations||[]).map(a=>a.class_id))].map(cid => {
+    const info = ds.cmap[cid] || { name:`Class ${cid}`, color:'#f00' };
+    return `<span class="img-tag" style="background:${info.color}18;color:${info.color};border:1px solid ${info.color}28">${esc(info.name)}</span>`;
+  });
+
+  const dbTags = (imgData.tags || []).map(t => {
+    return `<span style="background:rgba(255,255,255,0.06);color:var(--text-secondary);border:1px solid var(--border);padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:600">${esc(t)}</span>`;
+  }).join(' ');
+
+  card.innerHTML = `
+    <div class="img-thumb">
+      <img src="/${urlPrefix}/${enc(imgData.filename)}" loading="lazy" alt="${esc(imgData.filename)}">
+      <svg class="ann-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" style="${showAnn?'':'display:none'}">${polys}</svg>
+      <div class="chk"><svg viewBox="0 0 24 24"><path d="M9,16.17L4.83,12L3.41,13.41L9,19L21,7L19.59,5.59L9,16.17Z"/></svg></div>
+    </div>
+    <div class="img-info">
+      <div class="img-fn" title="${esc(imgData.filename)}">${esc(imgData.filename)}</div>
+      <div class="img-db-tags" style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px;min-height:16px">${dbTags}</div>
+      <div class="img-meta">
+        <span class="img-idx">#${index+1}</span>
+        <div class="img-tags">${classBadges.length ? classBadges.join('') : '<span class="img-tag no-lbl">No Labels</span>'}</div>
+      </div>
+    </div>`;
+  return card;
+}
+
+function renderBatch(imgs, start, end, gridId, sentId, urlPrefix) {
+  const grid = document.getElementById(gridId);
+  const sent = document.getElementById(sentId);
+  for (let i = start; i < end && i < imgs.length; i++) {
+    if (i > 0 && i % 100 === 0) {
+      const s = document.createElement('div');
+      s.className = 'sep';
+      s.innerHTML = `<span>Image ${i+1} – ${Math.min(i+100, imgs.length)}</span>`;
+      grid.insertBefore(s, sent);
+    }
+    grid.insertBefore(makeCard(imgs[i], i, urlPrefix), sent);
+  }
+}
+
+function loadBatchMain() {
+  setSentinelState('ds-spin','ds-sent-txt', loadedMain < filteredImgs.length);
+  if (!ds || loadedMain >= filteredImgs.length) {
+    document.getElementById('ds-sent-txt').textContent = filteredImgs.length > 0 ? 'Semua gambar dimuat ✓' : 'Tidak ada gambar';
+    return;
+  }
+  const end = Math.min(loadedMain + BATCH, filteredImgs.length);
+  renderBatch(filteredImgs, loadedMain, end, 'ds-grid-inner', 'ds-sentinel', `dataset/${enc(ds.name)}/images`);
+  loadedMain = end;
+  setSentinelState('ds-spin','ds-sent-txt', loadedMain < filteredImgs.length);
+}
+
+function loadBatchAnn() {
+  if (!annData || loadedAnn >= filteredAnnImgs.length) {
+    document.getElementById('ann-sent-txt').textContent = filteredAnnImgs.length > 0 ? 'Semua gambar dimuat ✓' : 'Folder annotate kosong';
+    return;
+  }
+  const end = Math.min(loadedAnn + BATCH, filteredAnnImgs.length);
+  renderBatch(filteredAnnImgs, loadedAnn, end, 'ann-grid-inner', 'ann-sentinel', `dataset/${enc(ds.name)}/annotate/images`);
+  loadedAnn = end;
+  if (loadedAnn >= filteredAnnImgs.length)
+    document.getElementById('ann-sent-txt').textContent = 'Semua gambar dimuat ✓';
+}
+
+function setSentinelState(spinId, txtId, loading) {
+  document.getElementById(spinId).style.display = loading ? '' : 'none';
+}
+
+function setupObservers() {
+  obMain = new IntersectionObserver(e => {
+    if (e[0].isIntersecting && ds && currentPage === 'dataset') loadBatchMain();
+  }, { rootMargin: '400px' });
+  obMain.observe(document.getElementById('ds-sentinel'));
+
+  obAnn = new IntersectionObserver(e => {
+    if (e[0].isIntersecting && annData && currentPage === 'annotation') loadBatchAnn();
+  }, { rootMargin: '400px' });
+  obAnn.observe(document.getElementById('ann-sentinel'));
+
+  setupDragSelect();
+}
+
+// ═══════════════════════════════════════════
+// CLASS SETTINGS
+// ═══════════════════════════════════════════
+function buildClassEditor() {
+  if (!ds) return;
+  const list = document.getElementById('cls-list');
+  list.innerHTML = '';
+  ds.classes.names.forEach((name, i) => {
+    const col = ds.classes.color[i] || '#f00';
+    const row = document.createElement('div');
+    row.className = 'cls-row';
+    row.dataset.i = i;
+    row.innerHTML = `
+      <span class="cls-idx">#${i}</span>
+      <input class="cls-name-inp" type="text" value="${esc(name)}" placeholder="class name">
+      <div class="col-wrap" style="background:${col}">
+        <input class="col-inp" type="color" value="${col}">
+      </div>
+      <button class="btn btn-ghost" style="padding: 4px; color: var(--danger)" onclick="deleteClass(${i})">
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+      </button>`;
+    row.querySelector('.col-inp').addEventListener('input', e => {
+      row.querySelector('.col-wrap').style.background = e.target.value;
+    });
+    list.appendChild(row);
+  });
+}
+
+function saveClasses() {
+  const btn = document.getElementById('save-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Menyimpan…`;
+  const names = [], colors = [];
+  document.querySelectorAll('.cls-row').forEach(r => {
+    names.push(r.querySelector('.cls-name-inp').value.trim() || `class_${r.dataset.i}`);
+    colors.push(r.querySelector('.col-inp').value);
+  });
+  fetch(`/api/dataset/${enc(ds.name)}/classes`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ names, color: colors })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.success) throw new Error(d.error);
+    ds.classes.names = names; ds.classes.color = colors;
+    ds.cmap = buildCmap(ds.classes);
+    toast('YAML berhasil disimpan!');
+    buildPills();
+    renderDist(ds.images, ds.classes, 'ds-dist');
+    btn.disabled = false; btn.textContent = 'Simpan YAML Config';
+  })
+  .catch(e => { toast(`Error: ${e.message}`, 'err'); btn.disabled = false; btn.textContent = 'Simpan YAML Config'; });
+}
+
+// ═══════════════════════════════════════════
+// SELECTION ACTIONS
+// ═══════════════════════════════════════════
+function doDelete() {
+  if (!selected.size) return;
+  const fns = [...selected];
+  document.getElementById('confirm-title').textContent = 'Hapus Gambar';
+  document.getElementById('confirm-body').textContent  = `Hapus ${fns.length} gambar beserta labelnya secara permanen? Tindakan ini tidak dapat dibatalkan.`;
+  const okBtn = document.getElementById('confirm-ok');
+  okBtn.className = 'btn btn-danger';
+  okBtn.textContent = 'Hapus';
+  openModal('confirm-modal');
+  okBtn.onclick = () => {
+    closeModal('confirm-modal');
+    showLoader(true, 'Menghapus…');
+    fetch(`/api/dataset/${enc(ds.name)}/delete`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ filenames: fns })
+    })
+    .then(r => r.json())
+    .then(d => {
+      showLoader(false);
+      const del = new Set(d.deleted);
+      ds.images = ds.images.filter(img => !del.has(img.filename));
+      selected.clear(); syncSelUI();
+      renderStats(ds.images, 'ds-stats', true);
+      renderDist(ds.images, ds.classes, 'ds-dist');
+      filteredImgs = [...ds.images];
+      clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+      toast(`${d.deleted.length} gambar dihapus`);
+      if (d.errors.length) toast(`${d.errors.length} error`, 'err');
+    })
+    .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+  };
+}
+
+function doRename() {
+  if (!selected.size) return;
+  const fns = [...selected];
+  const isSingle = fns.length === 1;
+
+  // ── Modal setup ──
+  const title   = document.getElementById('rename-title');
+  const desc    = document.getElementById('rename-desc');
+  const inp     = document.getElementById('rename-inp');
+  const preview = document.getElementById('rename-preview');
+  const okBtn   = document.getElementById('rename-ok');
+  const addBtn  = document.getElementById('rename-add');
+
+  if (isSingle) {
+    title.textContent   = 'Rename Image';
+    desc.textContent    = 'Masukkan nama baru (ekstensi dipertahankan otomatis).';
+    inp.placeholder     = 'nama_file_baru';
+    inp.value           = fns[0].replace(/\.[^/.]+$/, '');
+  } else {
+    title.textContent = `Batch Rename — ${fns.length} gambar`;
+    desc.textContent  = 'Rename (overwrite seluruh nama) atau Add Name (tambah prefix di depan).';
+    inp.placeholder   = 'nama_dasar / prefix';
+    inp.value         = '';
+  }
+  
+  preview.style.display = 'block';
+  preview.innerHTML = 'Preview:<br><span style="color:var(--text-muted)">Ketik nama dasar di atas...</span>';
+
+  // Live preview for both modes
+  inp.oninput = () => {
+    const base = inp.value.trim();
+    if (!base) {
+      preview.innerHTML = 'Preview:<br><span style="color:var(--text-muted)">Ketik nama dasar di atas...</span>';
+      return;
+    }
+    
+    // Sample for Rename
+    let renameText = '';
+    if (isSingle) {
+      const ext = fns[0].match(/\.[^/.]+$/)?.[0] || '';
+      renameText = `${base}${ext}`;
+    } else {
+      const samples = fns.slice(0, 3).map((f, i) => {
+        const ext = f.match(/\.[^/.]+$/)?.[0] || '';
+        return `${base}_${i}${ext}`;
+      });
+      renameText = samples.join(', ') + (fns.length > 3 ? ' ...' : '');
+    }
+
+    // Sample for Add Name (Prefix)
+    const addNameSamples = fns.slice(0, isSingle ? 1 : 3).map((f, i) => {
+      const ext = f.match(/\.[^/.]+$/)?.[0] || '';
+      const orig = f.replace(/\.[^/.]+$/, '');
+      return `${base}_${i}_${orig}${ext}`;
+    });
+    let addNameText = addNameSamples.join(', ') + (!isSingle && fns.length > 3 ? ' ...' : '');
+
+    preview.innerHTML = `
+      <div style="margin-top: 8px; font-size: 0.82rem;">
+        <span style="color:var(--text-secondary); font-weight:600">Rename:</span> <code style="color:var(--accent-light)">${esc(renameText)}</code>
+      </div>
+      <div style="margin-top: 4px; font-size: 0.82rem;">
+        <span style="color:var(--text-secondary); font-weight:600">Add Name:</span> <code style="color:var(--accent-light)">${esc(addNameText)}</code>
+      </div>
+    `;
+  };
+
+  openModal('rename-modal');
+
+  const submitRename = (mode) => {
+    const baseName = inp.value.trim();
+    if (!baseName) { toast('Nama tidak boleh kosong', 'err'); return; }
+    closeModal('rename-modal');
+
+    if (isSingle && mode === "overwrite") {
+      // ── Single standard rename (overwrite) ──
+      const oldFn = fns[0];
+      showLoader(true, 'Renaming…');
+      fetch(`/api/dataset/${enc(ds.name)}/rename`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ old_filename: oldFn, new_filename: baseName })
+      })
+      .then(r => r.json())
+      .then(d => {
+        showLoader(false);
+        if (!d.success) throw new Error(d.detail || 'Rename gagal');
+        const img = ds.images.find(i => i.filename === oldFn);
+        if (img) img.filename = d.new_filename;
+        selected.delete(oldFn); selected.add(d.new_filename);
+        filteredImgs = [...ds.images];
+        clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+        toast(`Renamed ke "${d.new_filename}"`);
+      })
+      .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+    } else {
+      // ── Batch rename / Single rename with prefix ──
+      showLoader(true, `Renaming ${fns.length} gambar…`);
+      fetch(`/api/dataset/${enc(ds.name)}/rename-batch`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ base_name: baseName, filenames: fns, mode: mode })
+      })
+      .then(r => r.json())
+      .then(d => {
+        showLoader(false);
+        const renamed = d.renamed || [];
+        const oldToNew = {};
+        renamed.forEach(r => { oldToNew[r.old] = r.new; });
+        ds.images.forEach(img => { if (oldToNew[img.filename]) img.filename = oldToNew[img.filename]; });
+        selected.clear();
+        renamed.forEach(r => selected.add(r.new));
+        filteredImgs = [...ds.images];
+        clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+        toast(`${renamed.length} gambar berhasil direname`);
+        if (d.errors?.length) toast(`${d.errors.length} error`, 'err');
+      })
+      .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+    }
+  };
+
+  okBtn.onclick = () => submitRename("overwrite");
+  addBtn.onclick = () => submitRename("prefix");
+}
+
+function doAnnotate() {
+  if (!selected.size) return;
+  const fns = [...selected];
+  document.getElementById('confirm-title').textContent = 'Pindah ke Annotate';
+  document.getElementById('confirm-body').textContent  = `Pindahkan ${fns.length} gambar + label ke folder annotate/ ? File akan dipindahkan (bukan disalin).`;
+  const okBtn = document.getElementById('confirm-ok');
+  okBtn.className = 'btn btn-accent';
+  okBtn.textContent = 'Pindahkan';
+  openModal('confirm-modal');
+  okBtn.onclick = () => {
+    closeModal('confirm-modal');
+    showLoader(true, 'Memindahkan…');
+    fetch(`/api/dataset/${enc(ds.name)}/annotate`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ filenames: fns })
+    })
+    .then(r => r.json())
+    .then(d => {
+      showLoader(false);
+      const moved = new Set(d.moved);
+      ds.images = ds.images.filter(img => !moved.has(img.filename));
+      annData = null;
+      selected.clear(); syncSelUI();
+      renderStats(ds.images, 'ds-stats', true);
+      renderDist(ds.images, ds.classes, 'ds-dist');
+      filteredImgs = [...ds.images];
+      clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+      toast(`${d.moved.length} gambar dipindahkan ke annotate`);
+      if (d.errors.length) toast(`${d.errors.length} error`, 'err');
+      // reset button
+      okBtn.className = 'btn btn-danger'; okBtn.textContent = 'OK';
+    })
+    .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+  };
+}
+
+// ═══════════════════════════════════════════
+// TAGS & CLASS MANAGEMENT & FILTERING
+// ═══════════════════════════════════════════
+let activeTagsFilter = new Set();
+
+function toggleTagsFilterDropdown(e) {
+  e.stopPropagation();
+  document.getElementById('tags-filter-menu').classList.toggle('show');
+}
+
+function refreshTagsFilterDropdown() {
+  fetch('/api/tags')
+    .then(r => r.json())
+    .then(tags => {
+      const menu = document.getElementById('tags-filter-menu');
+      menu.innerHTML = '';
+      
+      const allItem = document.createElement('div');
+      allItem.className = 'dropdown-item';
+      const allChecked = activeTagsFilter.size === 0;
+      allItem.innerHTML = `<input type="checkbox" id="tag-filter-all" ${allChecked ? 'checked' : ''}><span>SEMUA</span>`;
+      allItem.onclick = (e) => {
+        e.stopPropagation();
+        activeTagsFilter.clear();
+        refreshTagsFilterDropdown();
+        applyFilters();
+      };
+      menu.appendChild(allItem);
+      
+      tags.forEach(t => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item';
+        const checked = activeTagsFilter.has(t.name);
+        item.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(t.name)}</span>`;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          if (activeTagsFilter.has(t.name)) {
+            activeTagsFilter.delete(t.name);
+          } else {
+            activeTagsFilter.add(t.name);
+          }
+          refreshTagsFilterDropdown();
+          applyFilters();
+        };
+        menu.appendChild(item);
+      });
+    });
+}
+
+function doManageImageTags() {
+  if (!selected.size) return;
+  const fns = [...selected];
+  
+  fetch('/api/tags')
+    .then(r => r.json())
+    .then(tags => {
+      const list = document.getElementById('image-tags-list');
+      list.innerHTML = '';
+      if (!tags.length) {
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem;text-align:center">Belum ada tag yang dibuat. Silakan tambahkan tag di Class Settings.</div>';
+        document.getElementById('image-tags-save').disabled = true;
+        openModal('image-tags-modal');
+        return;
+      }
+      document.getElementById('image-tags-save').disabled = false;
+      
+      const tagCounts = {};
+      fns.forEach(fn => {
+        const img = ds.images.find(i => i.filename === fn);
+        if (img && img.tags) {
+          img.tags.forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+        }
+      });
+      
+      tags.forEach(t => {
+        const item = document.createElement('label');
+        item.style.display = 'flex';
+        item.style.alignItems = 'center';
+        item.style.gap = '8px';
+        item.style.padding = '6px 0';
+        item.style.cursor = 'pointer';
+        
+        const count = tagCounts[t.name] || 0;
+        const checked = count === fns.length;
+        const indeterminate = count > 0 && count < fns.length;
+        
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = t.name;
+        cb.checked = checked;
+        cb.indeterminate = indeterminate;
+        cb.style.accentColor = 'var(--accent)';
+        
+        item.appendChild(cb);
+        
+        const spanName = document.createElement('span');
+        spanName.textContent = t.name;
+        item.appendChild(spanName);
+        
+        if (count > 0 && count < fns.length) {
+          const spanInfo = document.createElement('span');
+          spanInfo.style.fontSize = '0.75rem';
+          spanInfo.style.color = 'var(--text-muted)';
+          spanInfo.textContent = ` (diterapkan pada ${count}/${fns.length} gambar)`;
+          item.appendChild(spanInfo);
+        }
+        
+        list.appendChild(item);
+      });
+      
+      openModal('image-tags-modal');
+      
+      document.getElementById('image-tags-save').onclick = () => {
+        const selectedTags = [];
+        list.querySelectorAll('input[type=checkbox]').forEach(cb => {
+          if (cb.checked) {
+            selectedTags.push(cb.value);
+          }
+        });
+        
+        closeModal('image-tags-modal');
+        showLoader(true, 'Menyimpan tags…');
+        
+        fetch(`/api/dataset/${enc(ds.name)}/image-tags`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filenames: fns, tags: selectedTags })
+        })
+        .then(r => r.json())
+        .then(d => {
+          if (d.detail) throw new Error(d.detail);
+          showLoader(false);
+          toast(`Tags berhasil disimpan untuk ${fns.length} gambar`);
+          
+          fns.forEach(fn => {
+            const img = ds.images.find(i => i.filename === fn);
+            if (img) img.tags = [...selectedTags];
+          });
+          
+          selected.clear();
+          syncSelUI();
+          clearGrid('ds-grid-inner','ds-sentinel');
+          loadedMain = 0;
+          loadBatchMain();
+        })
+        .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+      };
+    });
+}
+
+function loadTagsManager() {
+  fetch('/api/tags')
+    .then(r => r.json())
+    .then(tags => {
+      const list = document.getElementById('tags-list');
+      list.innerHTML = '';
+      if (!tags.length) {
+        list.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem;padding:10px 0">Belum ada tags</div>';
+        return;
+      }
+      tags.forEach(t => {
+        const row = document.createElement('div');
+        row.className = 'cls-row';
+        row.style.justifyContent = 'space-between';
+        row.innerHTML = `
+          <span style="font-weight:600;color:var(--text-primary)">${esc(t.name)}</span>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="badge">${t.count} gambar</span>
+            <button class="btn btn-ghost" style="padding: 4px; color: var(--danger)" onclick="deleteTag('${esc(t.name)}')">
+              <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+            </button>
+          </div>`;
+        list.appendChild(row);
+      });
+    });
+}
+
+function addNewTag() {
+  const inp = document.getElementById('new-tag-inp');
+  const name = inp.value.trim();
+  if (!name) return;
+  fetch('/api/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.detail) throw new Error(d.detail);
+    inp.value = '';
+    toast(`Tag "${name}" berhasil ditambahkan`);
+    loadTagsManager();
+    refreshTagsFilterDropdown();
+  })
+  .catch(e => toast(`Error: ${e.message}`, 'err'));
+}
+
+function deleteTag(name) {
+  fetch('/api/tags')
+    .then(r => r.json())
+    .then(tags => {
+      const tag = tags.find(t => t.name === name);
+      const count = tag ? tag.count : 0;
+      
+      document.getElementById('confirm-title').textContent = 'Hapus Tag';
+      document.getElementById('confirm-body').innerHTML = `Hapus tag <strong>${esc(name)}</strong>?<br><br>Tag akan dihapus dari <strong>${count}</strong> gambar secara permanen.`;
+      
+      const okBtn = document.getElementById('confirm-ok');
+      okBtn.className = 'btn btn-danger';
+      okBtn.textContent = 'Hapus';
+      okBtn.onclick = () => {
+        closeModal('confirm-modal');
+        showLoader(true, 'Menghapus tag…');
+        fetch(`/api/tags/${enc(name)}`, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(() => {
+            showLoader(false);
+            toast(`Tag "${name}" dihapus`);
+            loadTagsManager();
+            refreshTagsFilterDropdown();
+            if (ds) {
+              loadDataset(ds.name, currentPage, false);
+            }
+          })
+          .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+      };
+      openModal('confirm-modal');
+    });
+}
+
+function addNewClassRow() {
+  const list = document.getElementById('cls-list');
+  const nextIdx = list.querySelectorAll('.cls-row').length;
+  const col = '#ff0000';
+  const row = document.createElement('div');
+  row.className = 'cls-row new-row';
+  row.dataset.i = nextIdx;
+  row.innerHTML = `
+    <span class="cls-idx">#${nextIdx}</span>
+    <input class="cls-name-inp" type="text" value="" placeholder="class_${nextIdx}">
+    <div class="col-wrap" style="background:${col}">
+      <input class="col-inp" type="color" value="${col}">
+    </div>
+    <button class="btn btn-ghost" style="padding: 4px; color: var(--danger)" onclick="removeNewClassRow(this)">
+      <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>
+    </button>`;
+  row.querySelector('.col-inp').addEventListener('input', e => {
+    row.querySelector('.col-wrap').style.background = e.target.value;
+  });
+  list.appendChild(row);
+}
+
+function removeNewClassRow(btn) {
+  const row = btn.closest('.cls-row');
+  row.remove();
+  const list = document.getElementById('cls-list');
+  list.querySelectorAll('.cls-row').forEach((r, idx) => {
+    r.dataset.i = idx;
+    r.querySelector('.cls-idx').textContent = `#${idx}`;
+  });
+}
+
+function deleteClass(classId) {
+  if (!ds) return;
+  const className = ds.classes.names[classId];
+  showLoader(true, 'Menghitung anotasi…');
+  
+  fetch(`/api/dataset/${enc(ds.name)}/class-annotations-count/${classId}`)
+    .then(r => r.json())
+    .then(d => {
+      showLoader(false);
+      const count = d.count;
+      
+      document.getElementById('confirm-title').textContent = 'Hapus Class';
+      document.getElementById('confirm-body').innerHTML = `Anda ingin menghapus class <strong>${esc(className)}</strong>?<br><br>Warning: <strong>${count}</strong> anotasi untuk class ini akan dihapus secara permanen dari semua file label. Tindakan ini tidak dapat dibatalkan.`;
+      
+      const okBtn = document.getElementById('confirm-ok');
+      okBtn.className = 'btn btn-danger';
+      okBtn.textContent = 'Hapus Permanen';
+      okBtn.onclick = () => {
+        closeModal('confirm-modal');
+        startClassDeletion(classId, className);
+      };
+      openModal('confirm-modal');
+    })
+    .catch(e => {
+      showLoader(false);
+      toast(`Gagal menghitung anotasi: ${e.message}`, 'err');
+    });
+}
+
+function startClassDeletion(classId, className) {
+  document.getElementById('progress-title').textContent = `Menghapus Class "${className}"`;
+  document.getElementById('progress-percent').textContent = '0%';
+  document.getElementById('progress-desc').textContent = 'Mengupdate file label...';
+  openModal('progress-modal');
+  
+  fetch(`/api/dataset/${enc(ds.name)}/delete-class/${classId}`, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.success) throw new Error(d.detail || 'Gagal memulai penghapusan');
+      pollDeleteClassProgress(classId);
+    })
+    .catch(e => {
+      closeModal('progress-modal');
+      toast(`Error: ${e.message}`, 'err');
+    });
+}
+
+function pollDeleteClassProgress(classId) {
+  const timer = setInterval(() => {
+    fetch(`/api/dataset/${enc(ds.name)}/delete-class-progress/${classId}`)
+      .then(r => r.json())
+      .then(d => {
+        const p = d.progress;
+        if (p === -1.0) {
+          clearInterval(timer);
+          closeModal('progress-modal');
+          toast('Terjadi kesalahan saat menghapus class', 'err');
+        } else if (p >= 100.0) {
+          clearInterval(timer);
+          document.getElementById('progress-percent').textContent = '100%';
+          setTimeout(() => {
+            closeModal('progress-modal');
+            toast('Class berhasil dihapus!');
+            loadDataset(ds.name, 'class', false);
+          }, 500);
+        } else {
+          document.getElementById('progress-percent').textContent = `${p}%`;
+        }
+      })
+      .catch(() => {});
+  }, 300);
+}
+
+// ═══════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════
+function switchView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+function buildCmap(classes) {
+  const m = {};
+  (classes.names || []).forEach((name, i) => { m[i] = { name, color: classes.color[i] || '#f00' }; });
+  return m;
+}
+function enc(s) { return encodeURIComponent(s); }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
