@@ -5,11 +5,14 @@ import mimetypes
 import yaml
 import sqlite3
 import threading
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+import json
+import base64
+import httpx
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import uvicorn
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,6 +76,13 @@ class TagCreate(BaseModel):
 class ImageTagsUpdate(BaseModel):
     filenames: List[str]
     tags: List[str]
+
+class LLMSettings(BaseModel):
+    api_url: str
+    api_key: Optional[str] = ""
+    model: Optional[str] = ""
+
+LLM_SETTINGS_PATH = os.path.join(BASE_DIR, 'llm_settings.json')
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -605,6 +615,80 @@ def get_delete_class_progress(dataset_name: str, class_id: int):
     progress = class_delete_progress.get(progress_key, 0.0)
     return {"progress": progress}
 
+
+# ─────────────────────────────────────────────
+# LLM Settings
+# ─────────────────────────────────────────────
+
+@app.get("/api/llm-settings")
+def get_llm_settings():
+    if os.path.exists(LLM_SETTINGS_PATH):
+        with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": ""}
+
+@app.post("/api/llm-settings")
+def save_llm_settings(settings: LLMSettings):
+    with open(LLM_SETTINGS_PATH, 'w', encoding='utf-8') as f:
+        json.dump(settings.dict(), f, indent=2)
+    return {"success": True}
+
+# ─────────────────────────────────────────────
+# LLM Proxy (CORS transparent bridge)
+# ─────────────────────────────────────────────
+
+def _load_llm_settings_dict():
+    if os.path.exists(LLM_SETTINGS_PATH):
+        with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": ""}
+
+@app.get("/api/llm/models")
+def proxy_llm_models():
+    cfg = _load_llm_settings_dict()
+    url = cfg.get("api_url", "http://127.0.0.1:1234").rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("api_key"):
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    try:
+        r = httpx.get(f"{url}/v1/models", headers=headers, timeout=10)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+@app.post("/api/llm/chat")
+async def proxy_llm_chat(request: Request):
+    cfg = _load_llm_settings_dict()
+    url = cfg.get("api_url", "http://127.0.0.1:1234").rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("api_key"):
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    body = await request.body()
+
+    async def stream_generator():
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream("POST", f"{url}/v1/chat/completions",
+                                     headers=headers, content=body) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+@app.get("/api/dataset/{dataset_name}/image-base64/{filename:path}")
+def get_image_base64(dataset_name: str, filename: str):
+    dataset_path = safe_dataset_path(dataset_name)
+    # check images dir first, then annotate/images
+    for subdir in ['images', os.path.join('annotate', 'images')]:
+        file_path = os.path.normpath(os.path.join(dataset_path, subdir, filename))
+        if not file_path.startswith(os.path.normpath(DATASET_DIR)):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if os.path.isfile(file_path):
+            mime_type, _ = mimetypes.guess_type(file_path)
+            mime_type = mime_type or "image/jpeg"
+            with open(file_path, 'rb') as f:
+                b64 = base64.b64encode(f.read()).decode('utf-8')
+            return {"base64": b64, "mime_type": mime_type}
+    raise HTTPException(status_code=404, detail="Image not found")
 
 # ─────────────────────────────────────────────
 # SPA catch-all — serve index.html for any

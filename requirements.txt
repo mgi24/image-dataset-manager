@@ -1,2 +1,3 @@
 ultralytics
+httpx
 # sqlite3 is used (built-in to Python, no installation required)

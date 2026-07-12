@@ -255,6 +255,158 @@
       cursor: pointer;
       accent-color: var(--accent);
     }
+
+    /* ══════════════════════════════════════════
+       SETTINGS PAGE
+    ══════════════════════════════════════════ */
+    .llm-settings-page{padding:28px 30px;max-width:620px}
+    .llm-settings-page h2{margin:0 0 6px;font-size:1.4rem;font-weight:800}
+    .llm-settings-page p{margin:0 0 22px;color:var(--text-secondary);font-size:.9rem}
+    .setting-group{display:flex;flex-direction:column;gap:6px;margin-bottom:18px}
+    .setting-label{font-size:.8rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+    .setting-inp{width:100%;padding:10px 14px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit;font-size:.92rem;transition:border-color .2s,box-shadow .2s}
+    .setting-inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 8px rgba(99,102,241,.15)}
+    .settings-btn-row{display:flex;gap:10px;margin-top:22px}
+    .model-chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+    .model-chip{background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);border-radius:10px;padding:10px 16px;cursor:pointer;transition:all .18s;display:flex;flex-direction:column;gap:2px}
+    .model-chip:hover{background:rgba(99,102,241,.16);border-color:rgba(99,102,241,.5)}
+    .model-chip.selected{background:rgba(99,102,241,.2);border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+    .model-chip-id{font-size:.82rem;font-weight:700;color:var(--accent-light)}
+    .model-chip-owner{font-size:.7rem;color:var(--text-muted)}
+    .settings-divider{border:none;border-top:1px solid var(--border);margin:28px 0}
+    .conn-status{display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;margin-top:12px;min-height:22px}
+    .conn-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .conn-dot.ok{background:var(--success);box-shadow:0 0 6px var(--success)}
+    .conn-dot.err{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+    .conn-dot.loading{background:var(--accent);animation:pulse-dot .8s ease-in-out infinite alternate}
+    @keyframes pulse-dot{from{opacity:.4}to{opacity:1}}
+
+    /* ══════════════════════════════════════════
+       CATEGORIZE PAGE
+    ══════════════════════════════════════════ */
+    .cat-page{padding:24px;display:flex;flex-direction:column;gap:0}
+    .cat-section{background:rgba(13,18,34,.5);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin-bottom:16px}
+    .cat-section-title{font-size:.78rem;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+    .cat-section-title span{flex:1}
+    /* method buttons */
+    .method-btns{display:flex;gap:12px}
+    .method-btn{flex:1;padding:18px 20px;border-radius:12px;border:2px solid var(--border);background:rgba(255,255,255,.02);cursor:pointer;font-family:inherit;display:flex;flex-direction:column;align-items:center;gap:8px;transition:all .2s;color:var(--text-muted)}
+    .method-btn:hover{background:rgba(99,102,241,.06);border-color:rgba(99,102,241,.3)}
+    .method-btn.active{background:rgba(99,102,241,.12);border-color:var(--accent);color:var(--accent-light);box-shadow:0 0 16px rgba(99,102,241,.15)}
+    .method-btn svg{width:28px;height:28px;fill:currentColor}
+    .method-btn-label{font-size:.88rem;font-weight:700;letter-spacing:.04em}
+    /* tag chips */
+    .tag-chips-wrap{display:flex;flex-wrap:wrap;gap:8px;min-height:36px;padding:8px;background:rgba(0,0,0,.2);border:1px solid var(--border);border-radius:8px;cursor:text;align-items:center}
+    .tag-chip-item{display:flex;align-items:center;gap:5px;background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.35);border-radius:6px;padding:3px 8px;font-size:.8rem;font-weight:700;color:var(--accent-light);white-space:nowrap}
+    .tag-chip-rm{cursor:pointer;color:var(--accent-light);opacity:.6;font-size:.9rem;line-height:1;padding:0 2px;transition:opacity .15s}
+    .tag-chip-rm:hover{opacity:1;color:var(--danger)}
+    .tag-chip-input{background:none;border:none;outline:none;color:var(--text-primary);font-family:inherit;font-size:.85rem;flex:1;min-width:80px;padding:2px 4px}
+    /* tag rows (per-tag name + description table) */
+    .tag-rows-table{width:100%;display:flex;flex-direction:column;gap:6px}
+    .tag-rows-header{display:grid;grid-template-columns:1fr 2fr 28px;gap:8px;padding:0 4px;font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em}
+    .tag-row{display:grid;grid-template-columns:1fr 2fr 28px;gap:8px;align-items:center}
+    .tag-row-inp{padding:7px 10px;background:rgba(0,0,0,.28);border:1px solid var(--border);border-radius:7px;color:var(--text-primary);font-family:inherit;font-size:.85rem;width:100%;transition:border-color .2s}
+    .tag-row-inp:focus{outline:none;border-color:var(--accent)}
+    .tag-row-inp.name-inp{font-weight:700}
+    .tag-row-rm{width:26px;height:26px;border-radius:6px;border:1px solid rgba(239,68,68,.25);background:rgba(239,68,68,.07);color:var(--danger);font-size:1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+    .tag-row-rm:hover{background:rgba(239,68,68,.18);border-color:var(--danger)}
+    .tag-add-row-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;background:rgba(99,102,241,.07);border:1px dashed rgba(99,102,241,.3);border-radius:7px;color:var(--accent-light);font-family:inherit;font-size:.82rem;font-weight:700;cursor:pointer;margin-top:4px;transition:all .18s;width:100%;justify-content:center}
+    .tag-add-row-btn:hover{background:rgba(99,102,241,.14);border-color:var(--accent)}
+    /* system prompt */
+    .sys-prompt-wrap{position:relative}
+    .sys-prompt-ta{width:100%;min-height:90px;padding:10px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);font-family:inherit;font-size:.82rem;line-height:1.5;resize:vertical;transition:border-color .2s}
+    .sys-prompt-ta:not([disabled]):focus{outline:none;border-color:var(--accent)}
+    .sys-prompt-ta[disabled]{cursor:not-allowed;opacity:.7}
+    .sys-prompt-edit-btn{position:absolute;top:8px;right:8px;padding:4px 10px;font-size:.73rem;font-weight:700;border-radius:6px;cursor:pointer;transition:all .15s;border:1px solid var(--border);background:rgba(255,255,255,.06);color:var(--text-secondary);font-family:inherit}
+    .sys-prompt-edit-btn:hover{background:rgba(255,255,255,.12)}
+    .sys-prompt-edit-btn.editing{border-color:var(--accent);color:var(--accent-light);background:rgba(99,102,241,.12)}
+    /* batch size */
+    .batch-row{display:flex;align-items:center;gap:14px}
+    .batch-inp{width:80px;padding:8px 12px;background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit;font-size:.95rem;font-weight:700;text-align:center;transition:border-color .2s}
+    .batch-inp:focus{outline:none;border-color:var(--accent)}
+    .batch-inp.invalid{border-color:var(--danger);box-shadow:0 0 6px rgba(239,68,68,.25)}
+    .batch-info{font-size:.82rem;color:var(--text-muted)}
+    /* categorize grid */
+    .cat-grid-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+    .cat-grid-header h3{margin:0;font-size:1rem;font-weight:700;flex:1}
+    .cat-sel-count{font-size:.82rem;color:var(--text-muted);font-weight:600}
+    .cat-grid-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+    .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;max-height:420px;overflow-y:auto;padding:4px 2px}
+    .cat-card{background:var(--bg-card);border:2px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:all .2s;position:relative}
+    .cat-card:hover{border-color:rgba(245,158,11,.4);transform:translateY(-2px)}
+    .cat-card.cat-selected{border-color:var(--select-col);box-shadow:0 0 0 1px var(--select-glow)}
+    .cat-card-img{position:relative;line-height:0;background:#05070e}
+    .cat-card-img img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+    .cat-card-chk{position:absolute;top:5px;right:5px;width:18px;height:18px;border-radius:4px;border:2px solid rgba(255,255,255,.4);background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;transition:all .15s}
+    .cat-card.cat-selected .cat-card-chk{border-color:var(--success);background:var(--success)}
+    .cat-card-chk svg{width:10px;height:10px;fill:#fff;opacity:0}
+    .cat-card.cat-selected .cat-card-chk svg{opacity:1}
+    .cat-card-name{padding:5px 7px;font-size:.65rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-secondary)}
+    /* start button */
+    .cat-start-btn{width:100%;padding:14px;background:var(--accent-grad);border:none;color:#fff;font-family:inherit;font-size:1rem;font-weight:800;border-radius:12px;cursor:pointer;box-shadow:var(--glow);transition:all .22s;letter-spacing:.04em;display:flex;align-items:center;justify-content:center;gap:10px}
+    .cat-start-btn:hover:not(:disabled){filter:brightness(1.12);transform:translateY(-2px);box-shadow:0 8px 28px -6px rgba(99,102,241,.5)}
+    .cat-start-btn:disabled{background:var(--bg-tertiary);color:var(--text-muted);cursor:not-allowed;box-shadow:none;transform:none;filter:none}
+
+    /* ── Monitor ── */
+    .cat-monitor{display:none;flex-direction:column;gap:0;padding:24px}
+    .cat-monitor.active{display:flex}
+    .monitor-header{background:rgba(13,18,34,.7);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:16px}
+    .monitor-title{font-size:1.25rem;font-weight:800;margin-bottom:4px}
+    .monitor-subtitle{font-size:.88rem;color:var(--text-secondary)}
+    .monitor-prog-wrap{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+    .monitor-prog-bar-bg{height:8px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+    .monitor-prog-bar{height:100%;border-radius:99px;background:var(--accent-grad);transition:width .4s ease}
+    .monitor-prog-label{display:flex;justify-content:space-between;font-size:.78rem;color:var(--text-muted);font-weight:600}
+    .monitor-workers{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-bottom:16px}
+    .worker-card{background:rgba(13,18,34,.6);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:200px;transition:border-color .3s}
+    .worker-card.active{border-color:rgba(99,102,241,.4)}
+    .worker-card.done{border-color:rgba(16,185,129,.35)}
+    .worker-card.failed{border-color:rgba(239,68,68,.35)}
+    .worker-card-img{position:relative;height:130px;background:#030509;overflow:hidden;flex-shrink:0}
+    .worker-card-img img{width:100%;height:100%;object-fit:cover;transition:opacity .3s}
+    .worker-card-img img.loading{opacity:.35}
+    .worker-slot-badge{position:absolute;top:7px;left:7px;background:rgba(0,0,0,.75);border-radius:5px;padding:2px 7px;font-size:.68rem;font-weight:800;color:var(--text-muted)}
+    .worker-status-badge{position:absolute;top:7px;right:7px;border-radius:5px;padding:2px 8px;font-size:.68rem;font-weight:800}
+    .worker-status-badge.idle{background:rgba(255,255,255,.06);color:var(--text-muted)}
+    .worker-status-badge.processing{background:rgba(99,102,241,.2);color:var(--accent-light);animation:blink-badge 1s ease-in-out infinite alternate}
+    .worker-status-badge.done{background:rgba(16,185,129,.15);color:var(--success)}
+    .worker-status-badge.failed{background:rgba(239,68,68,.15);color:var(--danger)}
+    @keyframes blink-badge{from{opacity:.6}to{opacity:1}}
+    .worker-body{padding:10px 12px;flex:1;display:flex;flex-direction:column;gap:5px;overflow:hidden}
+    .worker-filename{font-size:.72rem;font-weight:700;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .worker-thinking{font-size:.68rem;color:var(--text-muted);font-style:italic;line-height:1.45;max-height:48px;overflow:hidden;display:none;padding:4px 7px;background:rgba(255,255,255,.03);border-radius:5px;border-left:2px solid var(--text-muted)}
+    .worker-answer{font-size:.75rem;color:var(--accent-light);font-weight:600;line-height:1.45;max-height:60px;overflow:hidden;display:none;padding:4px 7px;background:rgba(99,102,241,.08);border-radius:5px}
+    .worker-result-tags{display:flex;flex-wrap:wrap;gap:4px;display:none}
+    .worker-result-tag{font-size:.68rem;font-weight:700;padding:2px 7px;border-radius:4px;background:rgba(16,185,129,.12);color:var(--success);border:1px solid rgba(16,185,129,.25)}
+    /* monitor bottom bar */
+    .monitor-bottom{display:flex;align-items:center;justify-content:flex-end;margin-top:4px}
+    /* report */
+    .cat-report{display:none;background:rgba(13,18,34,.7);border:1px solid var(--border);border-radius:12px;padding:22px 24px;margin-bottom:16px}
+    .cat-report.visible{display:block}
+    .cat-report h3{margin:0 0 14px;font-size:1.1rem;font-weight:800}
+    .report-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+    .report-chip{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px 14px;text-align:center}
+    .report-chip.good{border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.06)}
+    .report-chip.warn{border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.06)}
+    .report-chip.bad{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.06)}
+    .report-n{font-size:1.5rem;font-weight:800}
+    .report-chip.good .report-n{color:var(--success)}
+    .report-chip.warn .report-n{color:var(--select-col)}
+    .report-chip.bad .report-n{color:var(--danger)}
+    .report-l{font-size:.72rem;color:var(--text-muted);font-weight:600;margin-top:3px}
+    .failed-list{margin-top:12px;max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:5px}
+    .failed-item{padding:6px 10px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:6px;font-size:.78rem;color:var(--text-secondary);display:flex;align-items:center;gap:8px}
+    .failed-item code{font-size:.72rem;color:var(--danger);background:rgba(239,68,68,.08);padding:1px 5px;border-radius:3px}
+
+    /* recent results list style */
+    .recent-list{display:flex;flex-direction:column;gap:5px}
+    .recent-item{display:flex;align-items:center;gap:10px;padding:6px 12px;border-radius:7px;font-size:.78rem;border:1px solid transparent}
+    .recent-item.ok{background:rgba(16,185,129,.05);border-color:rgba(16,185,129,.15);color:var(--success)}
+    .recent-item.empty{background:rgba(255,255,255,.02);border-color:var(--border);color:var(--text-secondary)}
+    .recent-item.fail{background:rgba(239,68,68,.05);border-color:rgba(239,68,68,.15);color:var(--danger)}
+    .recent-item-fn{font-weight:700;flex-shrink:0;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .recent-item-info{font-size:.7rem;margin-left:auto;text-align:right}
+    .recent-item-thumb{width:36px;height:27px;border-radius:4px;object-fit:cover;flex-shrink:0;border:1px solid rgba(255,255,255,0.08);background:#000}
   </style>
 </head>
 <body>
@@ -400,6 +552,12 @@
     <div class="filters-bar" id="filters-bar">
       <span class="filters-label">Filter:</span>
       <div id="pills-wrap"></div>
+      <div class="flex1"></div>
+      <div class="zoom-controls" style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-right:4px">ZOOM</span>
+        <button class="tog-btn" style="padding:0;font-size:1.1rem;height:28px;width:28px;justify-content:center;align-items:center;line-height:1" onclick="zoomGrid(-1)" title="Zoom Out">-</button>
+        <button class="tog-btn" style="padding:0;font-size:1.1rem;height:28px;width:28px;justify-content:center;align-items:center;line-height:1" onclick="zoomGrid(1)" title="Zoom In">+</button>
+      </div>
     </div>
   </div>
 
@@ -419,6 +577,14 @@
       <button class="nav-item" id="nav-annotation" onclick="switchPage('annotation')">
         <svg viewBox="0 0 24 24"><path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/></svg>
         ANNOTATION
+      </button>
+      <button class="nav-item" id="nav-categorize" onclick="switchPage('categorize')">
+        <svg viewBox="0 0 24 24"><path d="M17,12H7V10H17M14,16H7V14H14M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3M19,19H5V8H19V19Z"/></svg>
+        CATEGORIZE
+      </button>
+      <button class="nav-item" id="nav-settings" onclick="switchPage('settings')">
+        <svg viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>
+        SETTINGS
       </button>
     </nav>
 
@@ -480,6 +646,183 @@
         </div>
       </div>
 
+      <!-- CATEGORIZE page -->
+      <div id="page-categorize" style="display:none">
+        <!-- SETUP MODE -->
+        <div id="cat-setup" class="cat-page">
+          <!-- Method selector -->
+          <div class="cat-section">
+            <div class="cat-section-title"><span>Gunakan</span></div>
+            <div class="method-btns">
+              <button class="method-btn active" id="cat-method-llm" onclick="selectCatMethod('llm')">
+                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+                <span class="method-btn-label">LLM</span>
+                <span style="font-size:.7rem;color:inherit;opacity:.7">AI Image Analysis</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Add Tags -->
+          <div class="cat-section">
+            <div class="cat-section-title"><span>Add Tags</span></div>
+            <div class="tag-rows-table" id="cat-tag-rows">
+              <div class="tag-rows-header">
+                <span>Tag Name</span>
+                <span>Description <span style="opacity:.5;font-weight:400;text-transform:none;letter-spacing:0">(opsional)</span></span>
+                <span></span>
+              </div>
+              <!-- rows injected by JS -->
+            </div>
+            <button class="tag-add-row-btn" onclick="addCatTagRow()">
+              <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+              Tambah Tag
+            </button>
+          </div>
+
+          <!-- System Prompt -->
+          <div class="cat-section">
+            <div class="cat-section-title"><span>System Prompt</span></div>
+            <div class="sys-prompt-wrap">
+              <textarea class="sys-prompt-ta" id="cat-sys-prompt" disabled></textarea>
+              <button class="sys-prompt-edit-btn" id="cat-sys-edit-btn" onclick="toggleSysPromptEdit()">Edit</button>
+            </div>
+          </div>
+
+          <!-- Batch Size -->
+          <div class="cat-section">
+            <div class="cat-section-title"><span>Batch Size</span></div>
+            <div class="batch-row">
+              <input class="batch-inp" id="cat-batch-size" type="number" value="4" min="1"
+                oninput="validateBatchSize()">
+              <span class="batch-info">request paralel ke LLM (lebih besar = lebih cepat, tapi lebih berat)</span>
+            </div>
+          </div>
+
+          <!-- Image Grid -->
+          <div class="cat-section">
+            <div class="cat-grid-header">
+              <h3>Pilih Gambar</h3>
+              <span class="cat-sel-count" id="cat-sel-count">0 dipilih</span>
+              <button class="btn btn-ghost" onclick="catSelectAll()" style="font-size:.78rem;padding:5px 12px">Select All</button>
+              <button class="btn btn-ghost" onclick="catSelectNone()" style="font-size:.78rem;padding:5px 12px">Clear</button>
+            </div>
+            <div class="cat-grid-filters" id="cat-grid-filters">
+              <span style="font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Filter:</span>
+              <div id="cat-pills-wrap"></div>
+              
+              <!-- Tag Filter Dropdown -->
+              <div class="dropdown-wrap" id="cat-tags-filter-wrap" style="margin-left:auto">
+                <button class="tog-btn" id="cat-tags-filter-btn" onclick="toggleCatTagsFilterDropdown(event)">
+                  <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M11,11V13H13V11H19V9H13V7H11V9H5V11H11M3,5H21V3H3V5M21,19V17H13V15H11V17H3V19H11V21H13V19H21Z"/></svg>
+                  Tags Filter
+                </button>
+                <div class="dropdown-menu" id="cat-tags-filter-menu"></div>
+              </div>
+            </div>
+            <div class="cat-grid" id="cat-grid"></div>
+          </div>
+
+          <!-- Start Button -->
+          <button class="cat-start-btn" id="cat-start-btn" disabled onclick="startCategorize()">
+            <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
+            Start Categorize
+          </button>
+        </div>
+
+        <!-- MONITOR MODE -->
+        <div id="cat-monitor" class="cat-monitor">
+          <div class="monitor-header">
+            <div class="monitor-header-top" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+              <div class="monitor-title" style="margin-bottom:0">Categorizing Images</div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-size:0.7rem; font-weight:800; color:var(--text-muted); letter-spacing:.04em; text-transform:uppercase">Model:</span>
+                <select class="setting-inp" id="monitor-model-select" onmousedown="onMonitorModelDropdownClick()" onchange="onMonitorModelSelectChange()" style="width:200px; padding:6px 10px; font-size:0.8rem; margin:0; height:unset; background:rgba(0,0,0,0.4)">
+                  <option value="">Loading models...</option>
+                </select>
+              </div>
+            </div>
+            <div class="monitor-subtitle" id="monitor-subtitle">Mempersiapkan…</div>
+            <div class="monitor-prog-wrap">
+              <div class="monitor-prog-bar-bg"><div class="monitor-prog-bar" id="monitor-prog-bar" style="width:0%"></div></div>
+              <div class="monitor-prog-label">
+                <span id="monitor-prog-done">0 / 0 selesai</span>
+                <span id="monitor-prog-pct">0%</span>
+              </div>
+            </div>
+            <!-- Live stats -->
+            <div class="monitor-live-stats" id="monitor-live-stats" style="display:flex;gap:12px;margin-top:10px;font-size:.78rem;">
+              <span style="color:var(--success);font-weight:700">✓ <span id="live-ok">0</span> berhasil</span>
+              <span style="color:var(--select-col);font-weight:700">◌ <span id="live-empty">0</span> kosong</span>
+              <span style="color:var(--danger);font-weight:700">✕ <span id="live-fail">0</span> gagal</span>
+            </div>
+          </div>
+          <div class="monitor-workers" id="monitor-workers"></div>
+          
+          <!-- 5 Recent Parsed Results -->
+          <div class="cat-section" id="monitor-recent-wrap" style="display:none; margin-bottom:16px; padding:14px 18px;">
+            <div class="cat-section-title" style="margin-bottom:10px; font-size:0.75rem;"><span>5 Hasil Parse Terakhir</span></div>
+            <div class="recent-list" id="monitor-recent-list"></div>
+          </div>
+
+          <div class="monitor-bottom" style="display:flex; gap:10px; justify-content:flex-end" id="monitor-bottom-actions">
+            <button class="btn btn-ghost" id="monitor-pause-btn" onclick="togglePauseCategorize()">Pause</button>
+            <button class="btn btn-danger" onclick="stopCategorize()">Stop</button>
+          </div>
+          <!-- shown after completion -->
+          <div id="monitor-done-action" style="display:none; justify-content:flex-end">
+            <button class="btn btn-ghost" onclick="resetCategorize()">← Kembali ke Setup</button>
+          </div>
+          <!-- Report (shown after done) -->
+          <div class="cat-report" id="cat-report">
+            <h3>📊 Hasil Kategorisasi</h3>
+            <div class="report-grid">
+              <div class="report-chip good"><div class="report-n" id="rep-ok">0</div><div class="report-l">Berhasil dapat tags</div></div>
+              <div class="report-chip warn"><div class="report-n" id="rep-empty">0</div><div class="report-l">Kosong / tidak ada tag</div></div>
+              <div class="report-chip bad"><div class="report-n" id="rep-fail">0</div><div class="report-l">Gagal parse JSON</div></div>
+            </div>
+            <div id="rep-failed-section" style="display:none">
+              <div style="font-size:.82rem;font-weight:700;color:var(--danger);margin-bottom:8px">Gambar gagal parse:</div>
+              <div class="failed-list" id="rep-failed-list"></div>
+              <div style="margin-top:14px;display:flex;gap:10px">
+                <button class="btn btn-accent" onclick="retryCategorize()">Retry Gagal</button>
+                <button class="btn btn-ghost" onclick="resetCategorize()">Tutup</button>
+              </div>
+            </div>
+            <div id="rep-no-fail-actions" style="margin-top:14px">
+              <button class="btn btn-ghost" onclick="resetCategorize()">Selesai</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS page -->
+      <div id="page-settings" style="display:none">
+        <div class="llm-settings-page">
+          <h2>LLM Settings</h2>
+          <p>Konfigurasi OpenAI-compatible API endpoint untuk fitur Categorize.</p>
+          <div class="setting-group">
+            <label class="setting-label">API URL</label>
+            <input class="setting-inp" id="set-api-url" type="url" placeholder="http://127.0.0.1:1234">
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(opsional)</span></label>
+            <input class="setting-inp" id="set-api-key" type="password" placeholder="sk-… atau kosongkan">
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">Model ID <span style="font-weight:400;text-transform:none;letter-spacing:0">(pilih dari daftar atau ketik manual)</span></label>
+            <input class="setting-inp" id="set-model" type="text" placeholder="Klik Test lalu pilih model…">
+          </div>
+          <div class="settings-btn-row">
+            <button class="btn btn-ghost" onclick="testLLMConnection()" id="set-test-btn">Test Connection</button>
+            <button class="btn btn-accent" onclick="saveLLMSettings()">Save</button>
+          </div>
+          <div class="conn-status" id="set-conn-status"></div>
+          <hr class="settings-divider">
+          <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Available Models</div>
+          <div class="model-chips" id="set-model-chips"><span style="color:var(--text-muted);font-size:.85rem">Klik "Test Connection" untuk melihat model…</span></div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -490,6 +833,7 @@
 // ═══════════════════════════════════════════
 let datasets = [];
 let ds = null;           // { name, classes, cmap, images }
+let currentCardSize = 235;
 let annData = null;
 let filteredImgs = [];
 let filteredAnnImgs = [];
@@ -682,12 +1026,15 @@ function loadDataset(name, targetPage = 'dataset', pushNav = true) {
 // ═══════════════════════════════════════════
 function switchPage(p, pushNav = true) {
   currentPage = p;
-  ['dataset','class','annotation'].forEach(n => {
-    document.getElementById(`nav-${n}`).classList.toggle('active', n === p);
+  ['dataset','class','annotation','categorize','settings'].forEach(n => {
+    const el = document.getElementById(`nav-${n}`);
+    if (el) el.classList.toggle('active', n === p);
   });
-  document.getElementById('page-dataset').style.display   = p === 'dataset'    ? '' : 'none';
-  document.getElementById('page-class').style.display     = p === 'class'      ? '' : 'none';
-  document.getElementById('page-annotation').style.display= p === 'annotation' ? 'flex' : 'none';
+  document.getElementById('page-dataset').style.display    = p === 'dataset'    ? '' : 'none';
+  document.getElementById('page-class').style.display      = p === 'class'      ? '' : 'none';
+  document.getElementById('page-annotation').style.display = p === 'annotation' ? 'flex' : 'none';
+  document.getElementById('page-categorize').style.display = p === 'categorize' ? '' : 'none';
+  document.getElementById('page-settings').style.display   = p === 'settings'   ? '' : 'none';
   const isGrid = p === 'dataset' || p === 'annotation';
   document.getElementById('hdr-srch-wrap').style.display = isGrid ? '' : 'none';
   document.getElementById('hdr-tags-filter-wrap').style.display = isGrid ? '' : 'none';
@@ -695,11 +1042,17 @@ function switchPage(p, pushNav = true) {
   document.getElementById('sel-toggle').style.display    = isGrid ? '' : 'none';
   document.getElementById('filters-bar').style.display   = isGrid ? '' : 'none';
   if (!isGrid) { document.getElementById('sel-bar').classList.remove('show'); }
-  
+
   if (p === 'class') {
     loadTagsManager();
   }
-  
+  if (p === 'categorize') {
+    initCatPage();
+  }
+  if (p === 'settings') {
+    loadLLMSettings();
+  }
+
   // Update URL
   if (ds) navigate(`/${enc(ds.name)}/${p}`, !pushNav);
   if (p === 'annotation' && ds && !annData) loadAnnotatePage();
@@ -792,7 +1145,13 @@ function applyFilters() {
   }
   
   if (activeTagsFilter.size > 0) {
-    imgs = imgs.filter(img => (img.tags || []).some(t => activeTagsFilter.has(t)));
+    imgs = imgs.filter(img => {
+      const imgTags = img.tags || [];
+      if (imgTags.length === 0) {
+        return activeTagsFilter.has('__untagged__');
+      }
+      return imgTags.some(t => activeTagsFilter.has(t));
+    });
   }
   
   const q = document.getElementById('hdr-srch').value.toLowerCase().trim();
@@ -807,6 +1166,15 @@ function applyFilters() {
 }
 
 // ═══════════════════════════════════════════
+function zoomGrid(direction) {
+  const step = 30;
+  const minSize = 115;
+  const maxSize = 535;
+  currentCardSize = Math.max(minSize, Math.min(maxSize, currentCardSize + direction * step));
+  const cols = `repeat(auto-fill, ${currentCardSize}px)`;
+  document.querySelectorAll('.img-grid').forEach(el => el.style.gridTemplateColumns = cols);
+}
+
 // ANNOTATION TOGGLE
 // ═══════════════════════════════════════════
 function toggleAnn() {
@@ -1135,8 +1503,8 @@ function doDelete() {
       selected.clear(); syncSelUI();
       renderStats(ds.images, 'ds-stats', true);
       renderDist(ds.images, ds.classes, 'ds-dist');
-      filteredImgs = [...ds.images];
-      clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+      refreshTagsFilterDropdown();
+      applyFilters();
       toast(`${d.deleted.length} gambar dihapus`);
       if (d.errors.length) toast(`${d.errors.length} error`, 'err');
     })
@@ -1292,8 +1660,8 @@ function doAnnotate() {
       selected.clear(); syncSelUI();
       renderStats(ds.images, 'ds-stats', true);
       renderDist(ds.images, ds.classes, 'ds-dist');
-      filteredImgs = [...ds.images];
-      clearGrid('ds-grid-inner','ds-sentinel'); loadedMain = 0; loadBatchMain();
+      refreshTagsFilterDropdown();
+      applyFilters();
       toast(`${d.moved.length} gambar dipindahkan ke annotate`);
       if (d.errors.length) toast(`${d.errors.length} error`, 'err');
       // reset button
@@ -1332,11 +1700,45 @@ function refreshTagsFilterDropdown() {
       };
       menu.appendChild(allItem);
       
+      // Compute counts of each tag in current dataset
+      const localCounts = {};
+      let localUntaggedCount = 0;
+      if (ds && ds.images) {
+        ds.images.forEach(img => {
+          const tList = img.tags || [];
+          if (tList.length === 0) {
+            localUntaggedCount++;
+          } else {
+            tList.forEach(t => {
+              localCounts[t] = (localCounts[t] || 0) + 1;
+            });
+          }
+        });
+      }
+
+      // Add "untagged" option
+      const untaggedItem = document.createElement('div');
+      untaggedItem.className = 'dropdown-item';
+      const untaggedChecked = activeTagsFilter.has('__untagged__');
+      untaggedItem.innerHTML = `<input type="checkbox" ${untaggedChecked ? 'checked' : ''}><span>untagged</span><span style="margin-left: auto; color: var(--text-muted); font-size: 0.75rem;">(${localUntaggedCount})</span>`;
+      untaggedItem.onclick = (e) => {
+        e.stopPropagation();
+        if (activeTagsFilter.has('__untagged__')) {
+          activeTagsFilter.delete('__untagged__');
+        } else {
+          activeTagsFilter.add('__untagged__');
+        }
+        refreshTagsFilterDropdown();
+        applyFilters();
+      };
+      menu.appendChild(untaggedItem);
+      
       tags.forEach(t => {
         const item = document.createElement('div');
         item.className = 'dropdown-item';
         const checked = activeTagsFilter.has(t.name);
-        item.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(t.name)}</span>`;
+        const count = localCounts[t.name] || 0;
+        item.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(t.name)}</span><span style="margin-left: auto; color: var(--text-muted); font-size: 0.75rem;">(${count})</span>`;
         item.onclick = (e) => {
           e.stopPropagation();
           if (activeTagsFilter.has(t.name)) {
@@ -1444,9 +1846,8 @@ function doManageImageTags() {
           
           selected.clear();
           syncSelUI();
-          clearGrid('ds-grid-inner','ds-sentinel');
-          loadedMain = 0;
-          loadBatchMain();
+          refreshTagsFilterDropdown();
+          applyFilters();
         })
         .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
       };
@@ -1652,6 +2053,963 @@ function buildCmap(classes) {
 }
 function enc(s) { return encodeURIComponent(s); }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ═══════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════
+function loadLLMSettings() {
+  fetch('/api/llm-settings')
+    .then(r => r.json())
+    .then(s => {
+      document.getElementById('set-api-url').value = s.api_url || '';
+      document.getElementById('set-api-key').value = s.api_key || '';
+      document.getElementById('set-model').value   = s.model || '';
+    })
+    .catch(() => {});
+}
+
+function saveLLMSettings() {
+  const payload = {
+    api_url: document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234',
+    api_key: document.getElementById('set-api-key').value.trim(),
+    model:   document.getElementById('set-model').value.trim()
+  };
+  fetch('/api/llm-settings', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(d => { if (d.success) toast('LLM Settings tersimpan!'); })
+  .catch(e => toast(`Error: ${e.message}`, 'err'));
+}
+
+function testLLMConnection() {
+  const btn = document.getElementById('set-test-btn');
+  const statusEl = document.getElementById('set-conn-status');
+  const chipsEl  = document.getElementById('set-model-chips');
+  btn.disabled = true;
+  statusEl.innerHTML = '<span class="conn-dot loading"></span> Menghubungkan…';
+  chipsEl.innerHTML = '';
+
+  // First save current values so proxy picks them up
+  const payload = {
+    api_url: document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234',
+    api_key: document.getElementById('set-api-key').value.trim(),
+    model:   document.getElementById('set-model').value.trim()
+  };
+  fetch('/api/llm-settings', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(() => fetch('/api/llm/models'))
+  .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+  .then(data => {
+    const models = data.data || [];
+    btn.disabled = false;
+    if (!models.length) {
+      statusEl.innerHTML = '<span class="conn-dot ok"></span> Terhubung — tidak ada model yang dimuat';
+      chipsEl.innerHTML = '<span style="color:var(--text-muted);font-size:.85rem">Tidak ada model aktif</span>';
+      return;
+    }
+    statusEl.innerHTML = `<span class="conn-dot ok"></span> Terhubung — ${models.length} model tersedia`;
+    chipsEl.innerHTML = '';
+    const currentModel = document.getElementById('set-model').value.trim();
+    models.forEach(m => {
+      const chip = document.createElement('div');
+      chip.className = 'model-chip' + (m.id === currentModel ? ' selected' : '');
+      chip.innerHTML = `<span class="model-chip-id">${esc(m.id)}</span><span class="model-chip-owner">${esc(m.owned_by || '')}</span>`;
+      chip.onclick = () => {
+        document.getElementById('set-model').value = m.id;
+        chipsEl.querySelectorAll('.model-chip').forEach(c => c.classList.remove('selected'));
+        chip.classList.add('selected');
+      };
+      chipsEl.appendChild(chip);
+    });
+  })
+  .catch(e => {
+    btn.disabled = false;
+    statusEl.innerHTML = `<span class="conn-dot err"></span> Gagal: ${esc(e.message)}`;
+    chipsEl.innerHTML = '';
+  });
+}
+
+// ═══════════════════════════════════════════
+// CATEGORIZE — state
+// ═══════════════════════════════════════════
+let catTags = [];            // [{name: string, desc: string}]
+let catMethod = 'llm';
+let catSelectedImgs = new Set();
+let catClsFilter = new Set();
+let catTagsFilter = new Set(); // Set of existing tag names to filter images in selection grid
+let catRunning = false;
+let catShouldStop = false;
+let catQueue = [];
+let catDone = 0;
+let catTotal = 0;
+let catRepOk = 0, catRepEmpty = 0, catRepFail = 0;
+let catFailedItems = [];     // [{filename, rawText}]
+let sysPromptEditing = false;
+
+// New state for stop, pause, and history
+let catControllers = {};       // Per-slot AbortController dictionary
+let catPaused = false;
+let catPausing = false;
+let catActiveWorkers = new Set();
+let catRecentResults = [];     // Max 5 items: {filename, status, tags/errorText}
+
+function selectCatMethod(m) {
+  catMethod = m;
+  document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`cat-method-${m}`);
+  if (btn) btn.classList.add('active');
+}
+
+// ── Tag rows (per-tag name + description) ──
+function addCatTagRow(name, desc) {
+  catTags.push({ name: name || '', desc: desc || '' });
+  renderCatTagRows();
+  updateSysPrompt();
+  updateStartBtn();
+  // focus the new name input
+  const rows = document.querySelectorAll('#cat-tag-rows .tag-row');
+  if (rows.length) rows[rows.length - 1].querySelector('.name-inp')?.focus();
+}
+
+function removeCatTagRow(i) {
+  catTags.splice(i, 1);
+  renderCatTagRows();
+  updateSysPrompt();
+  updateStartBtn();
+}
+
+function renderCatTagRows() {
+  const table = document.getElementById('cat-tag-rows');
+  // keep header, remove old rows
+  table.querySelectorAll('.tag-row').forEach(r => r.remove());
+  catTags.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'tag-row';
+    row.innerHTML = `
+      <input class="tag-row-inp name-inp" type="text" placeholder="nama tag" value="${esc(t.name)}"
+        oninput="catTagRowChange(${i},'name',this.value)" onkeydown="catTagRowKey(event,${i})">
+      <input class="tag-row-inp" type="text" placeholder="deskripsi (opsional)" value="${esc(t.desc)}"
+        oninput="catTagRowChange(${i},'desc',this.value)">
+      <button class="tag-row-rm" onclick="removeCatTagRow(${i})" title="Hapus">×</button>`;
+    table.appendChild(row);
+  });
+}
+
+function catTagRowChange(i, field, val) {
+  if (!catTags[i]) return;
+  catTags[i][field] = val.trim();
+  updateSysPrompt();
+  updateStartBtn();
+}
+
+function catTagRowKey(e, i) {
+  // Enter on last row → add new row
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (i === catTags.length - 1) addCatTagRow();
+    else {
+      const rows = document.querySelectorAll('#cat-tag-rows .tag-row');
+      rows[i + 1]?.querySelector('.name-inp')?.focus();
+    }
+  }
+}
+
+// ── System prompt ──
+function buildSystemPrompt(tags) {
+  // tags is now [{name, desc}]
+  const validTags = tags.filter(t => t.name.trim());
+  const tagList = validTags.map(t => t.name.trim()).join(', ');
+  const descLines = validTags.filter(t => t.desc.trim()).map(t => `  - "${t.name}": ${t.desc}`).join('\n');
+  const descSection = descLines ? `\nTag descriptions:\n${descLines}` : '';
+  return `You are an image analysis assistant. Analyze the provided image carefully.${descSection}
+Available tags: [${tagList}]
+Return ONLY a valid JSON object with this exact format (no markdown, no explanation):
+{"tags": ["tag_name_1", "tag_name_2"]}
+Rules:
+- Only include tags from the available tags list that are actually visible or relevant in the image
+- You may return multiple tags or an empty array if none match
+- Do NOT include any text outside the JSON object`;
+}
+
+function updateSysPrompt() {
+  if (sysPromptEditing) return;
+  const ta = document.getElementById('cat-sys-prompt');
+  const validTags = catTags.filter(t => t.name.trim());
+  if (ta) ta.value = validTags.length ? buildSystemPrompt(catTags) : '';
+}
+
+function toggleSysPromptEdit() {
+  sysPromptEditing = !sysPromptEditing;
+  const ta = document.getElementById('cat-sys-prompt');
+  const btn = document.getElementById('cat-sys-edit-btn');
+  ta.disabled = !sysPromptEditing;
+  btn.textContent = sysPromptEditing ? 'Lock' : 'Edit';
+  btn.classList.toggle('editing', sysPromptEditing);
+  if (sysPromptEditing) ta.focus();
+}
+
+// ── Batch size ──
+function validateBatchSize() {
+  const inp = document.getElementById('cat-batch-size');
+  const v = parseInt(inp.value);
+  const invalid = isNaN(v) || v < 1;
+  inp.classList.toggle('invalid', invalid);
+  updateStartBtn();
+}
+
+// ── Init cat page ──
+function initCatPage() {
+  if (!ds) return;
+  catTagsFilter.clear(); // Reset filter tags
+  buildCatPills();
+  refreshCatTagsFilterDropdown();
+  renderCatGrid();
+  renderCatTagRows();
+  updateStartBtn();
+}
+
+function buildCatPills() {
+  if (!ds) return;
+  const wrap = document.getElementById('cat-pills-wrap');
+  let html = `<button class="pill${catClsFilter.size === 0 ? ' active' : ''}" onclick="toggleCatFilter('all')">Semua</button>`;
+  ds.classes.names.forEach((name, i) => {
+    const col = ds.classes.color[i] || '#f00';
+    const on = catClsFilter.has(i);
+    html += `<button class="pill${on ? ' active' : ''}" onclick="toggleCatFilter(${i})" style="${on ? `background:${col}20;border-color:${col};color:${col}` : ''}">
+      <span class="pill-dot" style="background:${col}"></span>${esc(name)}</button>`;
+  });
+  wrap.innerHTML = html;
+}
+
+function toggleCatFilter(id) {
+  if (id === 'all') catClsFilter.clear();
+  else catClsFilter.has(id) ? catClsFilter.delete(id) : catClsFilter.add(id);
+  buildCatPills();
+  renderCatGrid();
+}
+
+function toggleCatTagsFilterDropdown(e) {
+  e.stopPropagation();
+  document.getElementById('cat-tags-filter-menu').classList.toggle('show');
+}
+
+// close categorize tag filter menu on click outside
+document.addEventListener('click', () => {
+  const el = document.getElementById('cat-tags-filter-menu');
+  if (el) el.classList.remove('show');
+});
+
+function refreshCatTagsFilterDropdown() {
+  fetch('/api/tags')
+    .then(r => r.json())
+    .then(tags => {
+      const menu = document.getElementById('cat-tags-filter-menu');
+      if (!menu) return;
+      menu.innerHTML = '';
+      
+      const allItem = document.createElement('div');
+      allItem.className = 'dropdown-item';
+      const allChecked = catTagsFilter.size === 0;
+      allItem.innerHTML = `<input type="checkbox" ${allChecked ? 'checked' : ''}><span>SEMUA</span>`;
+      allItem.onclick = (e) => {
+        e.stopPropagation();
+        catTagsFilter.clear();
+        refreshCatTagsFilterDropdown();
+        renderCatGrid();
+      };
+      menu.appendChild(allItem);
+      
+      // Compute counts of each tag in current dataset
+      const localCounts = {};
+      let localUntaggedCount = 0;
+      if (ds && ds.images) {
+        ds.images.forEach(img => {
+          const tList = img.tags || [];
+          if (tList.length === 0) {
+            localUntaggedCount++;
+          } else {
+            tList.forEach(t => {
+              localCounts[t] = (localCounts[t] || 0) + 1;
+            });
+          }
+        });
+      }
+
+      // Add "untagged" option
+      const untaggedItem = document.createElement('div');
+      untaggedItem.className = 'dropdown-item';
+      const untaggedChecked = catTagsFilter.has('__untagged__');
+      untaggedItem.innerHTML = `<input type="checkbox" ${untaggedChecked ? 'checked' : ''}><span>untagged</span><span style="margin-left: auto; color: var(--text-muted); font-size: 0.75rem;">(${localUntaggedCount})</span>`;
+      untaggedItem.onclick = (e) => {
+        e.stopPropagation();
+        if (catTagsFilter.has('__untagged__')) {
+          catTagsFilter.delete('__untagged__');
+        } else {
+          catTagsFilter.add('__untagged__');
+        }
+        refreshCatTagsFilterDropdown();
+        renderCatGrid();
+      };
+      menu.appendChild(untaggedItem);
+      
+      tags.forEach(t => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item';
+        const checked = catTagsFilter.has(t.name);
+        const count = localCounts[t.name] || 0;
+        item.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''}><span>${esc(t.name)}</span><span style="margin-left: auto; color: var(--text-muted); font-size: 0.75rem;">(${count})</span>`;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          if (catTagsFilter.has(t.name)) {
+            catTagsFilter.delete(t.name);
+          } else {
+            catTagsFilter.add(t.name);
+          }
+          refreshCatTagsFilterDropdown();
+          renderCatGrid();
+        };
+        menu.appendChild(item);
+      });
+    });
+}
+
+function getCatFilteredImgs() {
+  if (!ds) return [];
+  let imgs = ds.images;
+  
+  // Filter by classes
+  if (catClsFilter.size > 0) {
+    imgs = imgs.filter(img => img.annotations.some(a => catClsFilter.has(a.class_id)));
+  }
+  
+  // Filter by existing tags
+  if (catTagsFilter.size > 0) {
+    imgs = imgs.filter(img => {
+      const tList = img.tags || [];
+      if (catTagsFilter.has('__untagged__') && tList.length === 0) {
+        return true;
+      }
+      return tList.some(t => catTagsFilter.has(t));
+    });
+  }
+  
+  return imgs;
+}
+
+function renderCatGrid() {
+  const grid = document.getElementById('cat-grid');
+  const imgs = getCatFilteredImgs();
+  grid.innerHTML = '';
+  imgs.forEach(img => {
+    const card = document.createElement('div');
+    card.className = 'cat-card' + (catSelectedImgs.has(img.filename) ? ' cat-selected' : '');
+    card.dataset.fn = img.filename;
+    card.onclick = () => toggleCatCard(card);
+    card.innerHTML = `
+      <div class="cat-card-img">
+        <img src="/dataset/${enc(ds.name)}/images/${enc(img.filename)}" loading="lazy" alt="${esc(img.filename)}">
+        <div class="cat-card-chk"><svg viewBox="0 0 24 24"><path d="M9,16.17L4.83,12L3.41,13.41L9,19L21,7L19.59,5.59L9,16.17Z"/></svg></div>
+      </div>
+      <div class="cat-card-name" title="${esc(img.filename)}">${esc(img.filename)}</div>`;
+    grid.appendChild(card);
+  });
+  updateCatSelCount();
+}
+
+function toggleCatCard(card) {
+  const fn = card.dataset.fn;
+  if (catSelectedImgs.has(fn)) { catSelectedImgs.delete(fn); card.classList.remove('cat-selected'); }
+  else                          { catSelectedImgs.add(fn);    card.classList.add('cat-selected'); }
+  updateCatSelCount();
+  updateStartBtn();
+}
+
+function catSelectAll() {
+  getCatFilteredImgs().forEach(img => catSelectedImgs.add(img.filename));
+  document.querySelectorAll('.cat-card').forEach(c => c.classList.add('cat-selected'));
+  updateCatSelCount();
+  updateStartBtn();
+}
+
+function catSelectNone() {
+  catSelectedImgs.clear();
+  document.querySelectorAll('.cat-card').forEach(c => c.classList.remove('cat-selected'));
+  updateCatSelCount();
+  updateStartBtn();
+}
+
+function updateCatSelCount() {
+  const el = document.getElementById('cat-sel-count');
+  if (el) el.textContent = `${catSelectedImgs.size} dipilih`;
+}
+
+function updateStartBtn() {
+  const btn = document.getElementById('cat-start-btn');
+  if (!btn) return;
+  const batchOk = (() => { const v = parseInt(document.getElementById('cat-batch-size')?.value); return !isNaN(v) && v >= 1; })();
+  const hasValidTag = catTags.some(t => t.name.trim());
+  btn.disabled = !(hasValidTag && catSelectedImgs.size > 0 && batchOk);
+}
+
+// ═══════════════════════════════════════════
+// CATEGORIZE — Monitor / Run
+// ═══════════════════════════════════════════
+async function startCategorize() {
+  if (!ds) return;
+  catQueue = [...catSelectedImgs];
+  catTotal = catQueue.length;
+  catDone = 0;
+  catRepOk = 0; catRepEmpty = 0; catRepFail = 0;
+  catFailedItems = [];
+  catRunning = true;
+  catShouldStop = false;
+  catPaused = false;
+  catPausing = false;
+  catControllers = {};
+  catActiveWorkers.clear();
+  catRecentResults = [];
+  renderRecentResults();
+
+  // Resolve tags to name strings only for LLM
+  // (descriptions are embedded in system prompt by buildSystemPrompt)
+  const resolvedTags = catTags.filter(t => t.name.trim()).map(t => t.name.trim());
+  if (!resolvedTags.length) { toast('Tambahkan setidaknya 1 tag terlebih dahulu.', 'err'); return; }
+
+  // Populate active model in select dropdown
+  const settings = await fetch('/api/llm-settings').then(r => r.json()).catch(() => ({}));
+  const mSelect = document.getElementById('monitor-model-select');
+  if (mSelect && settings.model) {
+    mSelect.innerHTML = `<option value="${esc(settings.model)}" selected>${esc(settings.model)}</option>`;
+  }
+
+  // Switch to monitor UI
+  document.getElementById('cat-setup').style.display = 'none';
+  document.getElementById('cat-monitor').classList.add('active');
+  document.getElementById('cat-report').classList.remove('visible');
+  
+  // reset Pause button text
+  const pBtn = document.getElementById('monitor-pause-btn');
+  if (pBtn) {
+    pBtn.disabled = false;
+    pBtn.textContent = 'Pause';
+    pBtn.className = 'btn btn-ghost';
+  }
+
+  updateMonitorProgress();
+
+  const batchSize = Math.max(1, parseInt(document.getElementById('cat-batch-size').value) || 4);
+
+  // Build worker cards
+  const workersEl = document.getElementById('monitor-workers');
+  workersEl.innerHTML = '';
+  for (let i = 0; i < batchSize; i++) {
+    const wc = document.createElement('div');
+    wc.className = 'worker-card';
+    wc.id = `worker-${i}`;
+    wc.innerHTML = `
+      <div class="worker-card-img">
+        <img src="" alt="" class="loading" id="wimg-${i}">
+        <span class="worker-slot-badge">SLOT ${i+1}</span>
+        <span class="worker-status-badge idle" id="wstatus-${i}">IDLE</span>
+      </div>
+      <div class="worker-body">
+        <div class="worker-filename" id="wfn-${i}">—</div>
+        <div class="worker-thinking" id="wthink-${i}"></div>
+        <div class="worker-answer" id="wanswer-${i}"></div>
+        <div class="worker-result-tags" id="wtags-${i}"></div>
+      </div>`;
+    workersEl.appendChild(wc);
+  }
+
+  // Start workers
+  const workers = [];
+  for (let i = 0; i < batchSize; i++) {
+    workers.push(runWorker(i));
+  }
+  await Promise.all(workers);
+  catRunning = false;
+  showReport();
+}
+
+async function runWorker(slot) {
+  while (catQueue.length > 0 && !catShouldStop) {
+    if (catPausing || catPaused) {
+      break; // Pause requested or already paused, stop pulling new images
+    }
+    const filename = catQueue.shift();
+    if (!filename) break;
+    catActiveWorkers.add(slot);
+    try {
+      await processImage(slot, filename);
+    } finally {
+      catActiveWorkers.delete(slot);
+    }
+
+    if (catPausing && catActiveWorkers.size === 0) {
+      catPaused = true;
+      catPausing = false;
+      const pBtn = document.getElementById('monitor-pause-btn');
+      if (pBtn) {
+        pBtn.disabled = false;
+        pBtn.textContent = 'Resume';
+        pBtn.className = 'btn btn-accent';
+      }
+      document.getElementById('monitor-subtitle').textContent = 'Di-pause (batch selesai).';
+    }
+  }
+  // Mark idle when done
+  setWorkerStatus(slot, 'idle', '—', '');
+}
+
+async function processImage(slot, filename) {
+  setWorkerStatus(slot, 'processing', filename, '');
+  document.getElementById(`wthink-${slot}`).style.display = 'none';
+  document.getElementById(`wthink-${slot}`).textContent = '';
+  document.getElementById(`wanswer-${slot}`).style.display = 'none';
+  document.getElementById(`wanswer-${slot}`).textContent = '';
+  document.getElementById(`wtags-${slot}`).style.display = 'none';
+  document.getElementById(`wtags-${slot}`).innerHTML = '';
+
+  // Setup abort controller
+  const controller = new AbortController();
+  catControllers[slot] = controller;
+  const signal = controller.signal;
+
+  // Load image
+  const imgEl = document.getElementById(`wimg-${slot}`);
+  imgEl.classList.add('loading');
+  imgEl.src = `/dataset/${enc(ds.name)}/images/${enc(filename)}`;
+  imgEl.onload = () => imgEl.classList.remove('loading');
+
+  let rawAnswer = '';
+  let thinkingBuf = '';
+
+  try {
+    // Fetch base64
+    const b64resp = await fetch(`/api/dataset/${enc(ds.name)}/image-base64/${enc(filename)}`, { signal });
+    if (!b64resp.ok) throw new Error('Gagal load image');
+    const { base64, mime_type } = await b64resp.json();
+
+    const sysPrompt = document.getElementById('cat-sys-prompt').value.trim() || buildSystemPrompt(catTags);
+
+    const settings = await fetch('/api/llm-settings').then(r => r.json()).catch(() => ({}));
+
+    const chatPayload = {
+      model: settings.model || '',
+      stream: true,
+      messages: [
+        { role: 'system', content: sysPrompt },
+        { role: 'user', content: [
+          { type: 'text', text: 'Analyze this image and return the matching tags as JSON.' },
+          { type: 'image_url', image_url: { url: `data:${mime_type};base64,${base64}` } }
+        ]}
+      ]
+    };
+
+    const resp = await fetch('/api/llm/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(chatPayload),
+      signal
+    });
+
+    if (!resp.ok) throw new Error(`LLM error HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(data);
+          const delta = chunk.choices?.[0]?.delta;
+          if (!delta) continue;
+          // thinking stream
+          if (delta.reasoning_content) {
+            thinkingBuf += delta.reasoning_content;
+            const thinkEl = document.getElementById(`wthink-${slot}`);
+            thinkEl.style.display = 'block';
+            thinkEl.textContent = thinkingBuf.slice(-200); // show last 200 chars
+          }
+          // answer stream
+          if (delta.content) {
+            rawAnswer += delta.content;
+            const ansEl = document.getElementById(`wanswer-${slot}`);
+            ansEl.style.display = 'block';
+            ansEl.textContent = rawAnswer;
+          }
+        } catch (_) {}
+      }
+      if (catShouldStop) break;
+    }
+
+    // Hide thinking, hide answer stream
+    document.getElementById(`wthink-${slot}`).style.display = 'none';
+    document.getElementById(`wanswer-${slot}`).style.display = 'none';
+
+    // Parse JSON
+    const tags = parseLLMTags(rawAnswer);
+
+    if (tags === null) {
+      // parse fail
+      catRepFail++;
+      catFailedItems.push({ filename, rawText: rawAnswer });
+      setWorkerStatus(slot, 'failed', filename, '');
+      showResultTags(slot, [], true);
+      addRecentResult(filename, 'fail', rawAnswer || 'Empty output');
+    } else if (tags.length === 0) {
+      catRepEmpty++;
+      setWorkerStatus(slot, 'done', filename, '');
+      showResultTags(slot, [], false);
+      addRecentResult(filename, 'empty', []);
+    } else {
+      // Apply tags
+      await applyTagsToImage(filename, tags);
+      catRepOk++;
+      setWorkerStatus(slot, 'done', filename, '');
+      showResultTags(slot, tags, false);
+      addRecentResult(filename, 'ok', tags);
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      catRepFail++;
+      catFailedItems.push({ filename, rawText: String(err) });
+      setWorkerStatus(slot, 'failed', filename, '');
+      addRecentResult(filename, 'fail', String(err));
+    }
+    document.getElementById(`wthink-${slot}`).style.display = 'none';
+    document.getElementById(`wanswer-${slot}`).style.display = 'none';
+  } finally {
+    delete catControllers[slot];
+  }
+
+  catDone++;
+  updateMonitorProgress();
+}
+
+function parseLLMTags(text) {
+  if (!text) return null;
+  // Try to extract JSON object from text
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    const obj = JSON.parse(jsonMatch[0]);
+    if (Array.isArray(obj.tags)) {
+      return obj.tags.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim());
+    }
+    // Jika berhasil diparse sebagai JSON object tetapi tidak memiliki field "tags" (misal {}),
+    // kita anggap sebagai valid empty no tags.
+    if (typeof obj === 'object' && obj !== null) {
+      return [];
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function applyTagsToImage(filename, tags) {
+  if (!ds || !tags.length) return;
+  // Ensure tags exist in DB first (create if not)
+  const existingTags = await fetch('/api/tags').then(r => r.json()).catch(() => []);
+  const existingNames = new Set(existingTags.map(t => t.name));
+  for (const tag of tags) {
+    if (!existingNames.has(tag)) {
+      await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: tag })
+      }).catch(() => {});
+    }
+  }
+  // Get current tags on this image and merge
+  const img = ds.images.find(i => i.filename === filename);
+  const currentTags = img?.tags || [];
+  const mergedTags = [...new Set([...currentTags, ...tags])];
+
+  await fetch(`/api/dataset/${enc(ds.name)}/image-tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filenames: [filename], tags: mergedTags })
+  });
+
+  // Update local state
+  if (img) img.tags = mergedTags;
+}
+
+function setWorkerStatus(slot, status, filename, _unused) {
+  const card = document.getElementById(`worker-${slot}`);
+  if (!card) return;
+  card.className = `worker-card ${status === 'idle' ? '' : status}`;
+  const sb = document.getElementById(`wstatus-${slot}`);
+  if (sb) { sb.className = `worker-status-badge ${status}`; sb.textContent = status.toUpperCase(); }
+  const fn = document.getElementById(`wfn-${slot}`);
+  if (fn) fn.textContent = filename;
+}
+
+function showResultTags(slot, tags, failed) {
+  const el = document.getElementById(`wtags-${slot}`);
+  if (!el) return;
+  if (failed) {
+    el.innerHTML = '<span class="worker-result-tag" style="background:rgba(239,68,68,.12);color:var(--danger);border-color:rgba(239,68,68,.25)">PARSE FAIL</span>';
+    el.style.display = 'flex';
+  } else if (tags.length > 0) {
+    el.innerHTML = tags.map(t => `<span class="worker-result-tag">${esc(t)}</span>`).join('');
+    el.style.display = 'flex';
+  } else {
+    el.innerHTML = '<span class="worker-result-tag" style="background:rgba(148,163,184,.08);color:var(--text-muted);border-color:rgba(148,163,184,.15)">no tags</span>';
+    el.style.display = 'flex';
+  }
+}
+
+function updateMonitorProgress() {
+  const pct = catTotal > 0 ? Math.round(catDone / catTotal * 100) : 0;
+  document.getElementById('monitor-prog-bar').style.width = `${pct}%`;
+  document.getElementById('monitor-prog-done').textContent = `${catDone} / ${catTotal} selesai`;
+  document.getElementById('monitor-prog-pct').textContent = `${pct}%`;
+  document.getElementById('monitor-subtitle').textContent =
+    catShouldStop ? 'Dihentikan.' :
+    catDone >= catTotal && catTotal > 0 ? 'Selesai!' :
+    `${catTotal - catDone} gambar tersisa…`;
+  // Live stats update
+  const okEl = document.getElementById('live-ok');
+  const emptyEl = document.getElementById('live-empty');
+  const failEl = document.getElementById('live-fail');
+  if (okEl) okEl.textContent = catRepOk;
+  if (emptyEl) emptyEl.textContent = catRepEmpty;
+  if (failEl) failEl.textContent = catRepFail;
+}
+
+function stopCategorize() {
+  catShouldStop = true;
+  catRunning = false;
+  catPausing = false;
+  catPaused = false;
+  catQueue = [];
+  for (const slot in catControllers) {
+    if (catControllers[slot]) {
+      try { catControllers[slot].abort(); } catch(_) {}
+    }
+  }
+  catControllers = {};
+  document.getElementById('monitor-subtitle').textContent = 'Menghentikan secara instan…';
+}
+
+function togglePauseCategorize() {
+  const btn = document.getElementById('monitor-pause-btn');
+  if (!btn) return;
+  
+  if (!catPaused && !catPausing) {
+    // Start pausing
+    catPausing = true;
+    btn.disabled = true;
+    btn.textContent = 'Pausing...';
+    document.getElementById('monitor-subtitle').textContent = 'Menunggu batch saat ini selesai untuk di-pause…';
+    if (catActiveWorkers.size === 0) {
+      catPaused = true;
+      catPausing = false;
+      btn.disabled = false;
+      btn.textContent = 'Resume';
+      btn.className = 'btn btn-accent';
+      document.getElementById('monitor-subtitle').textContent = 'Di-pause.';
+    }
+  } else if (catPaused) {
+    // Resume execution
+    catPaused = false;
+    catPausing = false;
+    btn.textContent = 'Pause';
+    btn.className = 'btn btn-ghost';
+    document.getElementById('monitor-subtitle').textContent = 'Melanjutkan…';
+    updateMonitorProgress();
+    
+    // Restart active workers
+    const batchSize = Math.max(1, parseInt(document.getElementById('cat-batch-size').value) || 4);
+    for (let i = 0; i < batchSize; i++) {
+      if (!catActiveWorkers.has(i)) {
+        runWorker(i);
+      }
+    }
+  }
+}
+
+function addRecentResult(filename, status, info) {
+  catRecentResults.unshift({ filename, status, info });
+  if (catRecentResults.length > 5) catRecentResults.pop();
+  renderRecentResults();
+}
+
+function renderRecentResults() {
+  const wrap = document.getElementById('monitor-recent-wrap');
+  const list = document.getElementById('monitor-recent-list');
+  if (!wrap || !list) return;
+  
+  if (catRecentResults.length === 0) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  list.innerHTML = catRecentResults.map(r => {
+    let labelText = '';
+    let infoText = '';
+    if (r.status === 'ok') {
+      labelText = 'SUCCESS';
+      infoText = r.info.map(t => `<span class="worker-result-tag" style="margin:0">${esc(t)}</span>`).join(' ');
+    } else if (r.status === 'empty') {
+      labelText = 'NO TAGS';
+      infoText = '<span style="font-style:italic;opacity:.7">tidak ada tag yang relevan</span>';
+    } else {
+      labelText = 'PARSE FAIL';
+      infoText = `<span style="font-family:monospace;color:var(--danger)">${esc(r.info.slice(0, 50))}${r.info.length > 50 ? '…' : ''}</span>`;
+    }
+    return `
+      <div class="recent-item ${r.status}">
+        <img class="recent-item-thumb" src="/dataset/${enc(ds.name)}/images/${enc(r.filename)}" alt="" loading="lazy">
+        <span style="font-size:0.6rem; font-weight:800; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,0.2); flex-shrink:0">${labelText}</span>
+        <span class="recent-item-fn" title="${esc(r.filename)}">${esc(r.filename)}</span>
+        <span class="recent-item-info">${infoText}</span>
+      </div>`;
+  }).join('');
+}
+
+let isFetchingMonitorModels = false;
+async function onMonitorModelDropdownClick() {
+  if (isFetchingMonitorModels) return;
+  isFetchingMonitorModels = true;
+  const select = document.getElementById('monitor-model-select');
+  const currentVal = select.value;
+  try {
+    const r = await fetch('/api/llm/models');
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    const models = data.data || [];
+    select.innerHTML = '';
+    if (!models.length) {
+      select.innerHTML = '<option value="">No active models</option>';
+      return;
+    }
+    models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.id;
+      if (m.id === currentVal) opt.selected = true;
+      select.appendChild(opt);
+    });
+  } catch(_) {
+  } finally {
+    isFetchingMonitorModels = false;
+  }
+}
+
+async function onMonitorModelSelectChange() {
+  const select = document.getElementById('monitor-model-select');
+  const newModel = select.value;
+  if (!newModel) return;
+  try {
+    const s = await fetch('/api/llm-settings').then(r => r.json());
+    s.model = newModel;
+    await fetch('/api/llm-settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(s)
+    });
+    toast(`Model diganti ke: ${newModel}`);
+  } catch (e) {
+    toast(`Gagal mengganti model: ${e.message}`, 'err');
+  }
+}
+
+function showReport() {
+  document.getElementById('rep-ok').textContent    = catRepOk;
+  document.getElementById('rep-empty').textContent = catRepEmpty;
+  document.getElementById('rep-fail').textContent  = catRepFail;
+
+  const hasFail = catFailedItems.length > 0;
+  document.getElementById('rep-failed-section').style.display = hasFail ? '' : 'none';
+  document.getElementById('rep-no-fail-actions').style.display = hasFail ? 'none' : '';
+
+  if (hasFail) {
+    const list = document.getElementById('rep-failed-list');
+    list.innerHTML = catFailedItems.map(item =>
+      `<div class="failed-item">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:var(--danger);flex-shrink:0"><path d="M13,14H11V10H13M13,18H11V16H13M1,21H23L12,2L1,21Z"/></svg>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.filename)}</span>
+        <code>${esc(item.rawText.slice(0, 60))}${item.rawText.length > 60 ? '…' : ''}</code>
+      </div>`
+    ).join('');
+  }
+
+  document.getElementById('cat-report').classList.add('visible');
+  // Hide action buttons, show back button
+  const bottomActions = document.getElementById('monitor-bottom-actions');
+  if (bottomActions) bottomActions.style.display = 'none';
+  const doneAction = document.getElementById('monitor-done-action');
+  if (doneAction) doneAction.style.display = 'flex';
+  // refresh tags in main dataset view & categorize filter
+  refreshTagsFilterDropdown();
+  refreshCatTagsFilterDropdown();
+}
+
+async function retryCategorize() {
+  if (!catFailedItems.length) return;
+  const retryFiles = catFailedItems.map(i => i.filename);
+  catFailedItems = [];
+  catRepFail = 0;
+  catDone -= retryFiles.length;
+  catTotal = retryFiles.length + catQueue.length;
+  catQueue = [...retryFiles, ...catQueue];
+  catRunning = true;
+  catShouldStop = false;
+  document.getElementById('cat-report').classList.remove('visible');
+  updateMonitorProgress();
+
+  const batchSize = Math.max(1, parseInt(document.getElementById('cat-batch-size').value) || 4);
+  const workers = [];
+  for (let i = 0; i < Math.min(batchSize, retryFiles.length); i++) {
+    workers.push(runWorker(i));
+  }
+  await Promise.all(workers);
+  catRunning = false;
+  showReport();
+}
+
+function resetCategorize() {
+  catSelectedImgs.clear();
+  catRunning = false;
+  catShouldStop = false;
+  catPaused = false;
+  catPausing = false;
+  catQueue = [];
+  catRecentResults = [];
+  renderRecentResults();
+  document.getElementById('cat-monitor').classList.remove('active');
+  document.getElementById('cat-setup').style.display = '';
+  document.getElementById('cat-report').classList.remove('visible');
+  // Restore action buttons
+  const bottomActions = document.getElementById('monitor-bottom-actions');
+  if (bottomActions) bottomActions.style.display = 'flex';
+  const doneAction = document.getElementById('monitor-done-action');
+  if (doneAction) doneAction.style.display = 'none';
+  // Reset pause button
+  const pBtn = document.getElementById('monitor-pause-btn');
+  if (pBtn) { pBtn.disabled = false; pBtn.textContent = 'Pause'; pBtn.className = 'btn btn-ghost'; }
+  renderCatGrid();
+  updateStartBtn();
+}
+
 </script>
 </body>
 </html>
