@@ -1,0 +1,176 @@
+<!-- SETUP MODE -->
+<div id="auto-setup" class="cat-page">
+  
+  <!-- Class configuration table -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>Target Classes (Max 3)</span></div>
+    <div class="tag-rows-table" id="auto-class-rows" style="margin-bottom:12px">
+      <div class="tag-rows-header" style="grid-template-columns: 1fr 1fr 1.5fr auto">
+        <span>Class Name <span style="color:var(--danger)">*</span></span>
+        <span>Class Color <span style="color:var(--danger)">*</span></span>
+        <span>Description <span style="opacity:.5;font-weight:400;text-transform:none;letter-spacing:0">(optional hint)</span></span>
+        <span></span>
+      </div>
+      <!-- rows injected dynamically by JS -->
+    </div>
+    <button class="tag-add-row-btn" id="auto-add-row-btn" onclick="addAutoClassRow()">
+      <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+      Tambah Class
+    </button>
+  </div>
+
+  <!-- System & Retry Prompts Template (DISABLE by default, editable via Edit button) -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>Prompt Settings</span></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+      <div>
+        <label class="setting-label" style="margin-bottom:6px; display:block">Initial System Prompt</label>
+        <div class="sys-prompt-wrap">
+          <textarea class="sys-prompt-ta" id="auto-sys-prompt" disabled style="height:120px; font-size:0.75rem; padding-right:60px"></textarea>
+          <button class="sys-prompt-edit-btn" id="auto-sys-edit-btn" onclick="toggleAutoSysPromptEdit()">Edit</button>
+        </div>
+      </div>
+      <div>
+        <label class="setting-label" style="margin-bottom:6px; display:block">Retry Correction Prompt</label>
+        <div class="sys-prompt-wrap">
+          <textarea class="sys-prompt-ta" id="auto-retry-prompt" disabled style="height:120px; font-size:0.75rem; padding-right:60px"></textarea>
+          <button class="sys-prompt-edit-btn" id="auto-retry-edit-btn" onclick="toggleAutoRetryPromptEdit()">Edit</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Grid -->
+  <div class="cat-section">
+    <div class="cat-grid-header">
+      <h3>Pilih Gambar untuk Auto-Labeling</h3>
+      <span class="cat-sel-count" id="auto-sel-count">0 dipilih</span>
+      <button class="btn btn-ghost" onclick="autoSelectAll()" style="font-size:.78rem;padding:5px 12px">Select All</button>
+      <button class="btn btn-ghost" onclick="autoSelectNone()" style="font-size:.78rem;padding:5px 12px">Clear</button>
+    </div>
+    <div class="cat-grid-filters" id="auto-grid-filters">
+      <span style="font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Filter:</span>
+      <div id="auto-pills-wrap"></div>
+      
+      <!-- Tag Filter Dropdown -->
+      <div class="dropdown-wrap" id="auto-tags-filter-wrap" style="margin-left:auto">
+        <button class="tog-btn" id="auto-tags-filter-btn" onclick="toggleAutoTagsFilterDropdown(event)">
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M11,11V13H13V11H19V9H13V7H11V9H5V11H11M3,5H21V3H3V5M21,19V17H13V15H11V17H3V19H11V21H13V19H21Z"/></svg>
+          Tags Filter
+        </button>
+        <div class="dropdown-menu" id="auto-tags-filter-menu"></div>
+      </div>
+    </div>
+    <div class="cat-grid" id="auto-grid"></div>
+  </div>
+
+  <!-- Start Button -->
+  <button class="cat-start-btn" id="auto-start-btn" disabled onclick="startAutoLabeling()">
+    <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
+    Start Auto-Labeling
+  </button>
+</div>
+
+<!-- MONITOR/PROCESSING MODE -->
+<div id="auto-monitor" class="cat-monitor" style="padding:24px; gap:20px">
+  
+  <!-- Header & Progress -->
+  <div class="monitor-header" style="margin-bottom:0">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <div class="monitor-title" style="margin-bottom:0">Auto Point Labeling Processing</div>
+      <div class="monitor-live-stats" style="display:flex; gap:12px; font-size:.78rem; margin:0">
+        <span style="color:var(--success); font-weight:700">✓ <span id="auto-live-ok">0</span> accepted</span>
+        <span style="color:var(--select-col); font-weight:700">◌ <span id="auto-live-retries">0</span> retries</span>
+        <span style="color:var(--text-muted); font-weight:700">✕ <span id="auto-live-skipped">0</span> skipped</span>
+      </div>
+    </div>
+    <div class="monitor-subtitle" id="auto-monitor-subtitle">Mempersiapkan gambar…</div>
+    <div class="monitor-prog-wrap">
+      <div class="monitor-prog-bar-bg"><div class="monitor-prog-bar" id="auto-prog-bar" style="width:0%"></div></div>
+      <div class="monitor-prog-label">
+        <span id="auto-prog-done">0 / 0 selesai</span>
+        <span id="auto-prog-pct">0%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Split Visualizer & Info Panel -->
+  <div style="display:grid; grid-template-columns: 1.2fr 0.8fr; gap:20px; min-height:460px">
+    
+    <!-- Left Column: Visualizer images (Input vs Output) -->
+    <div style="display:flex; flex-direction:column; gap:16px; background:rgba(13,18,34,.5); border:1px solid var(--border); border-radius:12px; padding:20px">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; flex:1">
+        <!-- Input Image -->
+        <div style="display:flex; flex-direction:column; gap:8px">
+          <span class="setting-label" style="text-align:center">INPUT IMG (RAW)</span>
+          <div style="background:#030509; border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; flex:1; overflow:hidden; position:relative; min-height:280px">
+            <img id="auto-img-input" src="" style="max-width:100%; max-height:100%; object-fit:contain; display:block">
+            <span class="spinner" id="auto-img-input-loader" style="position:absolute; display:none"></span>
+          </div>
+        </div>
+        
+        <!-- Output Image (OpenCV processing drawn circle) -->
+        <div style="display:flex; flex-direction:column; gap:8px">
+          <span class="setting-label" style="text-align:center; color:var(--accent-light)">OUTPUT IMG (OPENCV PREVIEW)</span>
+          <div style="background:#030509; border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; flex:1; overflow:hidden; position:relative; min-height:280px">
+            <img id="auto-img-output" src="" style="max-width:100%; max-height:100%; object-fit:contain; display:block">
+            <span class="spinner" id="auto-img-output-loader" style="position:absolute; display:none"></span>
+            <div id="auto-preview-overlay-info" style="position:absolute; bottom:8px; left:8px; right:8px; background:rgba(0,0,0,0.7); padding:4px 8px; border-radius:4px; font-size:0.68rem; text-align:center; color:var(--text-secondary); display:none"></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Interactive Action Buttons -->
+      <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:16px; gap:12px">
+        <button class="btn btn-ghost" id="auto-pause-btn" onclick="togglePauseAuto()" style="font-weight:700; min-width:80px">Pause</button>
+        <div style="display:flex; gap:10px">
+          <button class="btn btn-ghost" id="auto-remove-btn" onclick="autoRemoveCurrent()" style="color:var(--danger); border-color:rgba(239,68,68,.3); background:rgba(239,68,68,.05)">Remove / Skip</button>
+          <button class="btn btn-ghost" id="auto-retry-btn" onclick="autoRetryCurrent()" style="color:var(--select-col); border-color:rgba(245,158,11,.3); background:rgba(245,158,11,.05)">Retry / Prompt Again</button>
+          <button class="btn btn-accent" id="auto-accept-btn" onclick="autoAcceptCurrent()" style="font-weight:800; min-width:110px">Accept / Save</button>
+        </div>
+        <button class="btn btn-danger" onclick="stopAutoLabeling()" style="font-weight:700">Stop</button>
+      </div>
+    </div>
+    
+    <!-- Right Column: LLM Output logs and live editable prompts -->
+    <div style="display:flex; flex-direction:column; gap:16px">
+      
+      <!-- Thinking stream logs -->
+      <div style="background:rgba(13,18,34,.5); border:1px solid var(--border); border-radius:12px; padding:16px; flex:1; display:flex; flex-direction:column; gap:8px">
+        <span class="setting-label">Thinking Process</span>
+        <div id="auto-think-panel" style="flex:1; background:rgba(0,0,0,0.2); border:1px solid var(--border); border-radius:8px; padding:10px; font-size:0.75rem; color:var(--text-secondary); overflow-y:auto; font-family:monospace; line-height:1.4; max-height:160px; min-height:90px">
+          Menunggu analisa AI…
+        </div>
+      </div>
+      
+      <!-- JSON/Raw Output logs -->
+      <div style="background:rgba(13,18,34,.5); border:1px solid var(--border); border-radius:12px; padding:16px; flex:1; display:flex; flex-direction:column; gap:8px">
+        <span class="setting-label">Jawaban (Parsed JSON)</span>
+        <pre id="auto-answer-panel" style="margin:0; background:rgba(0,0,0,0.3); border:1px solid var(--border); border-radius:8px; padding:10px; font-size:0.78rem; color:var(--accent-light); overflow-x:auto; font-family:monospace; min-height:70px">{}</pre>
+      </div>
+
+      <!-- Live Editable Prompts Panel (Editable during pause via edit button) -->
+      <div style="background:rgba(13,18,34,.5); border:1px solid var(--border); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:10px">
+        <div style="display:flex; justify-content:space-between; align-items:center">
+          <span class="setting-label" style="color:var(--text-secondary)">Live Prompts (Edit saat PAUSE)</span>
+          <span id="auto-prompt-status-badge" class="badge" style="font-size:0.65rem; padding:1px 6px">Active</span>
+        </div>
+        <div>
+          <label style="font-size:0.68rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:4px">System Prompt</label>
+          <div class="sys-prompt-wrap">
+            <textarea class="sys-prompt-ta" id="auto-monitor-sys-prompt" disabled style="height:70px; font-size:0.7rem; background:rgba(0,0,0,0.2); padding-right:50px"></textarea>
+            <button class="sys-prompt-edit-btn" id="auto-monitor-sys-edit-btn" onclick="toggleAutoMonitorSysEdit()" disabled style="padding:1px 6px; font-size:0.6rem; line-height:1; top:4px; right:4px">Edit</button>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:0.68rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:4px">Retry Prompt</label>
+          <div class="sys-prompt-wrap">
+            <textarea class="sys-prompt-ta" id="auto-monitor-retry-prompt" disabled style="height:70px; font-size:0.7rem; background:rgba(0,0,0,0.2); padding-right:50px"></textarea>
+            <button class="sys-prompt-edit-btn" id="auto-monitor-retry-edit-btn" onclick="toggleAutoMonitorRetryEdit()" disabled style="padding:1px 6px; font-size:0.6rem; line-height:1; top:4px; right:4px">Edit</button>
+          </div>
+        </div>
+      </div>
+      
+    </div>
+  </div>
+</div>

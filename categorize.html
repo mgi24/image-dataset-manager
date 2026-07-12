@@ -1,0 +1,145 @@
+<!-- SETUP MODE -->
+<div id="cat-setup" class="cat-page">
+  <!-- Method selector -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>Gunakan</span></div>
+    <div class="method-btns">
+      <button class="method-btn active" id="cat-method-llm" onclick="selectCatMethod('llm')">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+        <span class="method-btn-label">LLM</span>
+        <span style="font-size:.7rem;color:inherit;opacity:.7">AI Image Analysis</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Add Tags -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>Add Tags</span></div>
+    <div class="tag-rows-table" id="cat-tag-rows">
+      <div class="tag-rows-header">
+        <span>Tag Name</span>
+        <span>Description <span style="opacity:.5;font-weight:400;text-transform:none;letter-spacing:0">(opsional)</span></span>
+        <span></span>
+      </div>
+      <!-- rows injected by JS -->
+    </div>
+    <button class="tag-add-row-btn" onclick="addCatTagRow()">
+      <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/></svg>
+      Tambah Tag
+    </button>
+  </div>
+
+  <!-- System Prompt -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>System Prompt</span></div>
+    <div class="sys-prompt-wrap">
+      <textarea class="sys-prompt-ta" id="cat-sys-prompt" disabled></textarea>
+      <button class="sys-prompt-edit-btn" id="cat-sys-edit-btn" onclick="toggleSysPromptEdit()">Edit</button>
+    </div>
+  </div>
+
+  <!-- Batch Size -->
+  <div class="cat-section">
+    <div class="cat-section-title"><span>Batch Size</span></div>
+    <div class="batch-row">
+      <input class="batch-inp" id="cat-batch-size" type="number" value="4" min="1"
+        oninput="validateBatchSize()">
+      <span class="batch-info">request paralel ke LLM (lebih besar = lebih cepat, tapi lebih berat)</span>
+    </div>
+  </div>
+
+  <!-- Image Grid -->
+  <div class="cat-section">
+    <div class="cat-grid-header">
+      <h3>Pilih Gambar</h3>
+      <span class="cat-sel-count" id="cat-sel-count">0 dipilih</span>
+      <button class="btn btn-ghost" onclick="catSelectAll()" style="font-size:.78rem;padding:5px 12px">Select All</button>
+      <button class="btn btn-ghost" onclick="catSelectNone()" style="font-size:.78rem;padding:5px 12px">Clear</button>
+    </div>
+    <div class="cat-grid-filters" id="cat-grid-filters">
+      <span style="font-size:.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Filter:</span>
+      <div id="cat-pills-wrap"></div>
+      
+      <!-- Tag Filter Dropdown -->
+      <div class="dropdown-wrap" id="cat-tags-filter-wrap" style="margin-left:auto">
+        <button class="tog-btn" id="cat-tags-filter-btn" onclick="toggleCatTagsFilterDropdown(event)">
+          <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M11,11V13H13V11H19V9H13V7H11V9H5V11H11M3,5H21V3H3V5M21,19V17H13V15H11V17H3V19H11V21H13V19H21Z"/></svg>
+          Tags Filter
+        </button>
+        <div class="dropdown-menu" id="cat-tags-filter-menu"></div>
+      </div>
+    </div>
+    <div class="cat-grid" id="cat-grid"></div>
+  </div>
+
+  <!-- Start Button -->
+  <button class="cat-start-btn" id="cat-start-btn" disabled onclick="startCategorize()">
+    <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>
+    Start Categorize
+  </button>
+</div>
+
+<!-- MONITOR MODE -->
+<div id="cat-monitor" class="cat-monitor">
+  <div class="monitor-header">
+    <div class="monitor-header-top" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+      <div class="monitor-title" style="margin-bottom:0">Categorizing Images</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:0.7rem; font-weight:800; color:var(--text-muted); letter-spacing:.04em; text-transform:uppercase">Model:</span>
+        <select class="setting-inp" id="monitor-model-select" onmousedown="onMonitorModelDropdownClick()" onchange="onMonitorModelSelectChange()" style="width:200px; padding:6px 10px; font-size:0.8rem; margin:0; height:unset; background:rgba(0,0,0,0.4)">
+          <option value="">Loading models...</option>
+        </select>
+      </div>
+    </div>
+    <div class="monitor-subtitle" id="monitor-subtitle">Mempersiapkan…</div>
+    <div class="monitor-prog-wrap">
+      <div class="monitor-prog-bar-bg"><div class="monitor-prog-bar" id="monitor-prog-bar" style="width:0%"></div></div>
+      <div class="monitor-prog-label">
+        <span id="monitor-prog-done">0 / 0 selesai</span>
+        <span id="monitor-prog-pct">0%</span>
+      </div>
+    </div>
+    <!-- Live stats -->
+    <div class="monitor-live-stats" id="monitor-live-stats" style="display:flex;gap:12px;margin-top:10px;font-size:.78rem;">
+      <span style="color:var(--success);font-weight:700">✓ <span id="live-ok">0</span> berhasil</span>
+      <span style="color:var(--select-col);font-weight:700">◌ <span id="live-empty">0</span> kosong</span>
+      <span style="color:var(--danger);font-weight:700">✕ <span id="live-fail">0</span> gagal</span>
+    </div>
+  </div>
+  <div class="monitor-workers" id="monitor-workers"></div>
+  
+  <!-- 5 Recent Parsed Results -->
+  <div class="cat-section" id="monitor-recent-wrap" style="display:none; margin-bottom:16px; padding:14px 18px;">
+    <div class="cat-section-title" style="margin-bottom:10px; font-size:0.75rem;"><span>5 Hasil Parse Terakhir</span></div>
+    <div class="recent-list" id="monitor-recent-list"></div>
+  </div>
+
+  <div class="monitor-bottom" style="display:flex; gap:10px; justify-content:flex-end" id="monitor-bottom-actions">
+    <button class="btn btn-ghost" id="monitor-pause-btn" onclick="togglePauseCategorize()">Pause</button>
+    <button class="btn btn-danger" onclick="stopCategorize()">Stop</button>
+  </div>
+  <!-- shown after completion -->
+  <div id="monitor-done-action" style="display:none; justify-content:flex-end">
+    <button class="btn btn-ghost" onclick="resetCategorize()">← Kembali ke Setup</button>
+  </div>
+  <!-- Report (shown after done) -->
+  <div class="cat-report" id="cat-report">
+    <h3>📊 Hasil Kategorisasi</h3>
+    <div class="report-grid">
+      <div class="report-chip good"><div class="report-n" id="rep-ok">0</div><div class="report-l">Berhasil dapat tags</div></div>
+      <div class="report-chip warn"><div class="report-n" id="rep-empty">0</div><div class="report-l">Kosong / tidak ada tag</div></div>
+      <div class="report-chip bad"><div class="report-n" id="rep-fail">0</div><div class="report-l">Gagal parse JSON</div></div>
+    </div>
+    <div id="rep-failed-section" style="display:none">
+      <div style="font-size:.82rem;font-weight:700;color:var(--danger);margin-bottom:8px">Gambar gagal parse:</div>
+      <div class="failed-list" id="rep-failed-list"></div>
+      <div style="margin-top:14px;display:flex;gap:10px">
+        <button class="btn btn-accent" onclick="retryCategorize()">Retry Gagal</button>
+        <button class="btn btn-ghost" onclick="resetCategorize()">Tutup</button>
+      </div>
+    </div>
+    <div id="rep-no-fail-actions" style="margin-top:14px">
+      <button class="btn btn-ghost" onclick="resetCategorize()">Selesai</button>
+    </div>
+  </div>
+</div>

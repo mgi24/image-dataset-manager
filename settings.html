@@ -1,0 +1,36 @@
+<div class="llm-settings-page">
+  <h2>Dataset Settings</h2>
+  <p>Konfigurasi tipe dataset untuk fitur Annotation editor.</p>
+  <div class="setting-group">
+    <label class="setting-label">Dataset Type</label>
+    <select class="setting-inp" id="set-dataset-type" style="width:100%;padding:9px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit;font-size:.95rem;transition:border-color .2s;cursor:pointer;">
+      <option value="object_detection">Object Detection (Bounding Box)</option>
+      <option value="segment">Segmentation (Polygon)</option>
+    </select>
+  </div>
+  
+  <hr class="settings-divider">
+
+  <h2>LLM Settings</h2>
+  <p>Konfigurasi OpenAI-compatible API endpoint untuk fitur Categorize.</p>
+  <div class="setting-group">
+    <label class="setting-label">API URL</label>
+    <input class="setting-inp" id="set-api-url" type="url" placeholder="http://127.0.0.1:1234">
+  </div>
+  <div class="setting-group">
+    <label class="setting-label">API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(opsional)</span></label>
+    <input class="setting-inp" id="set-api-key" type="password" placeholder="sk-… atau kosongkan">
+  </div>
+  <div class="setting-group">
+    <label class="setting-label">Model ID <span style="font-weight:400;text-transform:none;letter-spacing:0">(pilih dari daftar atau ketik manual)</span></label>
+    <input class="setting-inp" id="set-model" type="text" placeholder="Klik Test lalu pilih model…">
+  </div>
+  <div class="settings-btn-row">
+    <button class="btn btn-ghost" onclick="testLLMConnection()" id="set-test-btn">Test Connection</button>
+    <button class="btn btn-accent" onclick="saveLLMSettings()">Save</button>
+  </div>
+  <div class="conn-status" id="set-conn-status"></div>
+  <hr class="settings-divider">
+  <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Available Models</div>
+  <div class="model-chips" id="set-model-chips"><span style="color:var(--text-muted);font-size:.85rem">Klik "Test Connection" untuk melihat model…</span></div>
+</div>

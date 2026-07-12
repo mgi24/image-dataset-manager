@@ -1,0 +1,23 @@
+<div class="settings-page" style="max-width: 650px">
+  <h2>Class Settings</h2>
+  <p>Edit nama dan warna class, lalu simpan ke <code>data.yaml</code>.</p>
+  <div class="cls-list" id="cls-list"></div>
+  
+  <div style="display:flex;gap:12px;margin-bottom:28px">
+    <button class="btn btn-ghost" onclick="addNewClassRow()" style="flex:1;justify-content:center">+ Tambah Class</button>
+    <button class="save-btn" id="save-btn" onclick="saveClasses()" style="flex:1">Simpan YAML Config</button>
+  </div>
+  
+  <!-- Tags Manager section -->
+  <div class="tags-manager" style="margin-top:40px;border-top:1px solid var(--border);padding-top:28px">
+    <h2>Tags Settings</h2>
+    <p>Kelola tags global untuk anotasi tambahan gambar (disimpan di database).</p>
+    
+    <div style="display:flex;gap:10px;margin-bottom:20px">
+      <input type="text" id="new-tag-inp" placeholder="Nama tag baru..." style="flex:1;padding:9px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit">
+      <button class="btn btn-accent" onclick="addNewTag()">Tambah Tag</button>
+    </div>
+    
+    <div class="cls-list" id="tags-list"></div>
+  </div>
+</div>

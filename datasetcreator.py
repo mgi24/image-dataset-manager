@@ -81,6 +81,11 @@ class LLMSettings(BaseModel):
     api_url: str
     api_key: Optional[str] = ""
     model: Optional[str] = ""
+    dataset_type: Optional[str] = "object_detection"
+
+class SaveAnnotationsRequest(BaseModel):
+    filename: str
+    annotations: list
 
 LLM_SETTINGS_PATH = os.path.join(BASE_DIR, 'llm_settings.json')
 
@@ -256,6 +261,31 @@ def get_annotate_details(dataset_name: str):
         except Exception as e:
             print(f"Error loading annotate images: {e}")
     return {"classes": yaml_data, "images": images_list}
+
+
+class SaveLabelRequest(BaseModel):
+    filename: str
+    label: str
+
+@app.post("/api/dataset/{dataset_name}/annotate/save-label")
+def save_annotate_label(dataset_name: str, payload: SaveLabelRequest):
+    """Save YOLO-format label file for an annotate/ image."""
+    dataset_path = safe_dataset_path(dataset_name)
+    ann_labels_dir = os.path.join(dataset_path, 'annotate', 'labels')
+    os.makedirs(ann_labels_dir, exist_ok=True)
+    # Security: only allow the filename portion, not a path
+    safe_fn = os.path.basename(payload.filename)
+    stem = os.path.splitext(safe_fn)[0]
+    label_path = os.path.normpath(os.path.join(ann_labels_dir, stem + '.txt'))
+    if not label_path.startswith(os.path.normpath(DATASET_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    try:
+        with open(label_path, 'w', encoding='utf-8') as f:
+            f.write(payload.label)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ─────────────────────────────────────────────
 # Class settings API
@@ -624,8 +654,11 @@ def get_delete_class_progress(dataset_name: str, class_id: int):
 def get_llm_settings():
     if os.path.exists(LLM_SETTINGS_PATH):
         with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": ""}
+            data = json.load(f)
+            if "dataset_type" not in data:
+                data["dataset_type"] = "object_detection"
+            return data
+    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection"}
 
 @app.post("/api/llm-settings")
 def save_llm_settings(settings: LLMSettings):
@@ -640,8 +673,11 @@ def save_llm_settings(settings: LLMSettings):
 def _load_llm_settings_dict():
     if os.path.exists(LLM_SETTINGS_PATH):
         with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": ""}
+            data = json.load(f)
+            if "dataset_type" not in data:
+                data["dataset_type"] = "object_detection"
+            return data
+    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection"}
 
 @app.get("/api/llm/models")
 def proxy_llm_models():
@@ -690,19 +726,185 @@ def get_image_base64(dataset_name: str, filename: str):
             return {"base64": b64, "mime_type": mime_type}
     raise HTTPException(status_code=404, detail="Image not found")
 
+
+@app.post("/api/dataset/{dataset_name}/save-annotations")
+def save_annotations(dataset_name: str, payload: SaveAnnotationsRequest):
+    dataset_path = safe_dataset_path(dataset_name)
+    filename = os.path.basename(payload.filename)
+    
+    label_dir = None
+    if os.path.isfile(os.path.normpath(os.path.join(dataset_path, 'images', filename))):
+        label_dir = os.path.join(dataset_path, 'labels')
+    elif os.path.isfile(os.path.normpath(os.path.join(dataset_path, 'annotate', 'images', filename))):
+        label_dir = os.path.join(dataset_path, 'annotate', 'labels')
+        
+    if not label_dir:
+        raise HTTPException(status_code=404, detail="Image not found in dataset directories")
+        
+    os.makedirs(label_dir, exist_ok=True)
+    label_filename = os.path.splitext(filename)[0] + '.txt'
+    label_path = os.path.join(label_dir, label_filename)
+    
+    yaml_path = os.path.join(dataset_path, 'data.yaml')
+    yaml_data = load_data_yaml(yaml_path)
+    class_names = yaml_data.get('names', [])
+    
+    lines = []
+    for ann in payload.annotations:
+        cls_name = ann.get('class')
+        x = ann.get('x')
+        y = ann.get('y')
+        if cls_name is None or x is None or y is None:
+            continue
+            
+        try:
+            class_id = class_names.index(cls_name)
+        except ValueError:
+            class_id = -1
+            for idx, name in enumerate(class_names):
+                if name.lower().strip() == cls_name.lower().strip():
+                    class_id = idx
+                    break
+            if class_id == -1:
+                continue
+                
+        lines.append(f"{class_id} {x:.6f} {y:.6f}")
+        
+    try:
+        if lines:
+            with open(label_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines) + "\n")
+        else:
+            if os.path.exists(label_path):
+                os.remove(label_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal menulis file label: {e}")
+        
+    return {"success": True}
+
+
+@app.get("/api/dataset/{dataset_name}/auto-preview")
+def get_auto_preview(dataset_name: str, filename: str, detections: str):
+    import cv2
+    import numpy as np
+    import io
+    import json
+    
+    dataset_path = safe_dataset_path(dataset_name)
+    
+    file_path = None
+    for subdir in ['images', os.path.join('annotate', 'images')]:
+        temp_path = os.path.normpath(os.path.join(dataset_path, subdir, filename))
+        if temp_path.startswith(os.path.normpath(DATASET_DIR)) and os.path.isfile(temp_path):
+            file_path = temp_path
+            break
+            
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Image not found")
+        
+    try:
+        with open(file_path, "rb") as f:
+            file_bytes = np.frombuffer(f.read(), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal membaca gambar: {e}")
+        
+    if img is None:
+        raise HTTPException(status_code=500, detail="Gagal men-decode gambar")
+        
+    h, w, _ = img.shape
+    
+    try:
+        dets = json.loads(detections)
+    except Exception:
+        dets = []
+        
+    color_map = {
+        "merah": (68, 68, 239),
+        "kuning": (11, 158, 245),
+        "biru": (246, 130, 59),
+        "hitam": (30, 30, 30),
+        "putih": (255, 255, 255)
+    }
+    
+    for idx, d in enumerate(dets, 1):
+        try:
+            x = float(d.get("x", 0))
+            y = float(d.get("y", 0))
+            color_str = str(d.get("color", "biru")).lower()
+            rgb = (59, 130, 246)
+            if color_str.startswith("#"):
+                hex_val = color_str.lstrip("#")
+                if len(hex_val) == 3:
+                    hex_val = "".join(c*2 for c in hex_val)
+                try:
+                    rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
+                    bgr = (rgb[2], rgb[1], rgb[0])
+                except Exception:
+                    bgr = (246, 130, 59)
+            else:
+                bgr = color_map.get(color_str, (246, 130, 59))
+                if color_str == "merah": rgb = (239, 68, 68)
+                elif color_str == "kuning": rgb = (245, 158, 11)
+                elif color_str == "biru": rgb = (59, 130, 246)
+                elif color_str == "hitam": rgb = (30, 30, 30)
+                elif color_str == "putih": rgb = (255, 255, 255)
+            
+            px = int(x * w)
+            py = int(y * h)
+            
+            min_dim = min(h, w)
+            radius = max(10, int(min_dim * 0.02))
+            
+            p1 = (px - radius, py - radius)
+            p2 = (px + radius, py + radius)
+            cv2.rectangle(img, p1, p2, bgr, -1)
+            
+            text = str(idx)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = max(0.35, min_dim * 0.0006)
+            thickness = max(1, int(min_dim * 0.0015))
+            
+            if sum(rgb) > 380:
+                text_col = (0, 0, 0)
+            else:
+                text_col = (255, 255, 255)
+                
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            tx = px - text_size[0] // 2
+            ty = py + text_size[1] // 2
+            cv2.putText(img, text, (tx, ty), font, font_scale, text_col, thickness, cv2.LINE_AA)
+        except Exception:
+            pass
+            
+    _, encoded_img = cv2.imencode('.jpg', img)
+    return StreamingResponse(
+        io.BytesIO(encoded_img.tobytes()), 
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache"}
+    )
+
+
+
 # ─────────────────────────────────────────────
 # SPA catch-all — serve index.html for any
 # non-API path so browser router can restore state
 # ─────────────────────────────────────────────
 
-@app.get("/{full_path:path}", response_class=HTMLResponse)
+@app.get("/{full_path:path}")
 def serve_spa_fallback(full_path: str):
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="API route not found")
+    if full_path:
+        file_path = os.path.normpath(os.path.join(BASE_DIR, full_path))
+        if not file_path.startswith(os.path.normpath(BASE_DIR)):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if os.path.isfile(file_path):
+            mime_type, _ = mimetypes.guess_type(file_path)
+            return FileResponse(file_path, media_type=mime_type or "application/octet-stream")
     index_path = os.path.join(BASE_DIR, 'index.html')
     if os.path.exists(index_path):
-        with open(index_path, 'r', encoding='utf-8') as f:
-            return f.read()
+        return FileResponse(index_path, media_type="text/html")
     raise HTTPException(status_code=404, detail="index.html not found")
 
 
