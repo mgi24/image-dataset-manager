@@ -18,4 +18,19 @@ Melakukan refaktorisasi pada file frontend utama `index.html` yang sebelumnya sa
 2. **Penyesuaian [datasetcreator.py](datasetcreator.py)**
    - Memodifikasi route `serve_spa_fallback` agar menyajikan file statis (`index.css`, `index.js`, dan partials HTML) jika file tersebut ada di disk.
 
-### ADD Ultralytics GPU
+## [2026-07-13] Integration and Validation of SAM 3.1 (Segment Anything Model 3.1)
+
+### Deskripsi
+Melakukan instalasi dependencies dan integrasi model segmentasi terbaru Meta **SAM 3.1** (Segment Anything Model 3.1) menggunakan framework `ultralytics`.
+
+### Perubahan Detail
+
+1. **Instalasi Dependencies & Unduh Weights Model**
+   - Menggunakan package manager `ultralytics` yang telah mendukung SAM 3.1 natively.
+   - Mengunduh file checkpoint model `sam3.1.pt` (~3.26 GB / 3340 MB) dari mirror publik Hugging Face `AEmotionStudio/sam3.1` (menggunakan script pembantu `download_sam3.py`) karena official checkpoint di gated oleh Meta.
+
+2. **Pembuatan Script Uji Coba ([samtest.py](samtest.py))**
+   - Menambahkan file [samtest.py](samtest.py) yang memindai dataset lokal di `dataset/v1/annotate/images`.
+   - Secara otomatis membaca file anotasi polygon YOLO (jika tersedia di subfolder `labels`), mencari bounding box minimum/maksimum dalam pixel, dan menjadikannya sebagai *prompt box* untuk input SAM 3.1.
+   - Melakukan inference menggunakan GPU/CUDA (dengan CUDA 12.8 pada virtual environment) yang membutuhkan waktu sekitar ~2.5 detik per gambar.
+   - Menampilkan hasil visualisasi segmentasi mask menggunakan window OpenCV (`cv2.imshow`) yang interaktif.
