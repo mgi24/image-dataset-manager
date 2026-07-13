@@ -160,3 +160,5 @@ dataset_manager.db
 Proposal jenis kendaraan v3.pdf
 *.zip
 license plate segment.v1-segment.yolov11/
+sam3.1.pt
+*.pt
