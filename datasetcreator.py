@@ -83,6 +83,9 @@ class LLMSettings(BaseModel):
     model: Optional[str] = ""
     dataset_type: Optional[str] = "object_detection"
 
+class MoveImagesRequest(BaseModel):
+    filenames: List[str]
+
 class SaveAnnotationsRequest(BaseModel):
     filename: str
     annotations: list
@@ -419,6 +422,60 @@ def move_to_annotate(dataset_name: str, payload: AnnotateMoveRequest):
 
 
 # ─────────────────────────────────────────────
+# Scan for Bounding Box labels API
+# ─────────────────────────────────────────────
+
+@app.post("/api/dataset/{dataset_name}/scan-bbox")
+def scan_dataset_for_bbox(dataset_name: str):
+    dataset_path = safe_dataset_path(dataset_name)
+    images_dir = os.path.join(dataset_path, 'images')
+    labels_dir = os.path.join(dataset_path, 'labels')
+    
+    bbox_files = []
+    
+    if os.path.exists(labels_dir):
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        image_files = {}
+        if os.path.exists(images_dir):
+            for f in os.listdir(images_dir):
+                stem, ext = os.path.splitext(f)
+                if ext.lower() in image_extensions:
+                    image_files[stem] = f
+        
+        for f in os.listdir(labels_dir):
+            if f.lower().endswith('.txt'):
+                label_path = os.path.join(labels_dir, f)
+                stem = os.path.splitext(f)[0]
+                if stem not in image_files:
+                    continue
+                
+                has_bbox = False
+                try:
+                    with open(label_path, 'r', encoding='utf-8') as lf:
+                        for line in lf:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split()
+                            if len(parts) == 5:
+                                try:
+                                    int(parts[0])
+                                    for val in parts[1:]:
+                                        float(val)
+                                    has_bbox = True
+                                    break
+                                except ValueError:
+                                    pass
+                except Exception as e:
+                    print(f"Error reading label file {label_path}: {e}")
+                
+                if has_bbox:
+                    bbox_files.append(image_files[stem])
+                    
+    return {"count": len(bbox_files), "bbox_files": bbox_files}
+
+
+# ─────────────────────────────────────────────
 # Batch rename images API
 # ─────────────────────────────────────────────
 
@@ -535,6 +592,16 @@ def update_image_tags(dataset_name: str, payload: ImageTagsUpdate):
     finally:
         conn.close()
     return {"success": True}
+
+@app.get("/api/dataset/{dataset_name}/image-tags/{filename:path}")
+def get_image_tags(dataset_name: str, filename: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT tag_name FROM image_tags WHERE dataset_name = ? AND image_filename = ?;", (dataset_name, filename))
+    rows = cursor.fetchall()
+    conn.close()
+    tags = [r[0] for r in rows]
+    return {"tags": tags}
 
 @app.get("/api/dataset/{dataset_name}/class-annotations-count/{class_id}")
 def get_class_annotations_count(dataset_name: str, class_id: int):
@@ -665,6 +732,83 @@ def save_llm_settings(settings: LLMSettings):
     with open(LLM_SETTINGS_PATH, 'w', encoding='utf-8') as f:
         json.dump(settings.dict(), f, indent=2)
     return {"success": True}
+
+@app.get("/api/dataset/{dataset_name}/check-segment")
+def check_segment_dataset(dataset_name: str):
+    """Scan dataset for images that have annotations mismatched with the dataset category."""
+    cfg = _load_llm_settings_dict()
+    dataset_type = cfg.get("dataset_type", "object_detection")
+    
+    dataset_path = safe_dataset_path(dataset_name)
+    images_dir = os.path.join(dataset_path, 'images')
+    labels_dir = os.path.join(dataset_path, 'labels')
+    
+    mismatched_images = []
+    if os.path.exists(images_dir):
+        for f in sorted(os.listdir(images_dir)):
+            name, ext = os.path.splitext(f)
+            if ext.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}:
+                label_path = os.path.join(labels_dir, name + '.txt')
+                if os.path.exists(label_path):
+                    has_mismatch = False
+                    try:
+                        annotations = parse_label_file(label_path)
+                        for ann in annotations:
+                            points_count = len(ann.get("points", []))
+                            if dataset_type == "segment":
+                                # Finding bounding box (exactly 2 points) in a segment dataset is a mismatch
+                                if points_count == 2:
+                                    has_mismatch = True
+                                    break
+                            else:
+                                # Finding segment/polygon (more than 2 points) in a BB dataset is a mismatch
+                                if points_count > 2:
+                                    has_mismatch = True
+                                    break
+                    except Exception as e:
+                        print(f"Error parsing label {label_path}: {e}")
+                    
+                    if has_mismatch:
+                        mismatched_images.append(f)
+                        
+    return {
+        "count": len(mismatched_images), 
+        "images": mismatched_images, 
+        "dataset_type": dataset_type
+    }
+
+@app.post("/api/dataset/{dataset_name}/move-to-annotate")
+def move_images_to_annotate(dataset_name: str, payload: MoveImagesRequest):
+    """Move specified images and their labels to the annotate staging folder."""
+    dataset_path = safe_dataset_path(dataset_name)
+    src_images_dir = os.path.join(dataset_path, 'images')
+    src_labels_dir = os.path.join(dataset_path, 'labels')
+    dest_images_dir = os.path.join(dataset_path, 'annotate', 'images')
+    dest_labels_dir = os.path.join(dataset_path, 'annotate', 'labels')
+    
+    os.makedirs(dest_images_dir, exist_ok=True)
+    os.makedirs(dest_labels_dir, exist_ok=True)
+    
+    moved = []
+    errors = []
+    
+    for f in payload.filenames:
+        name, ext = os.path.splitext(f)
+        src_img = os.path.join(src_images_dir, f)
+        dest_img = os.path.join(dest_images_dir, f)
+        src_lbl = os.path.join(src_labels_dir, name + '.txt')
+        dest_lbl = os.path.join(dest_labels_dir, name + '.txt')
+        
+        try:
+            if os.path.exists(src_img):
+                shutil.move(src_img, dest_img)
+            if os.path.exists(src_lbl):
+                shutil.move(src_lbl, dest_lbl)
+            moved.append(f)
+        except Exception as e:
+            errors.append({"filename": f, "error": str(e)})
+            
+    return {"moved": moved, "errors": errors}
 
 # ─────────────────────────────────────────────
 # LLM Proxy (CORS transparent bridge)
@@ -911,8 +1055,4 @@ def serve_spa_fallback(full_path: str):
 if __name__ == '__main__':
     if not os.path.exists(DATASET_DIR):
         os.makedirs(DATASET_DIR, exist_ok=True)
-    print("=" * 60)
-    print("  Antigravity Dataset Manager")
-    print("  http://127.0.0.1:5000")
-    print("=" * 60)
-    uvicorn.run("datasetcreator:app", host="127.0.0.1", port=5000, reload=True)
+    uvicorn.run("datasetcreator:app", host="127.0.0.1", port=8000, reload=True)

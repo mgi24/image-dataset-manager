@@ -66,7 +66,7 @@ function restoreFromURL(initial = true) {
 async function loadPartials() {
   const pages = ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'settings'];
   for (const page of pages) {
-    const res = await fetch(`/${page}.html`);
+    const res = await fetch(`/${page}.html?t=${Date.now()}`);
     if (!res.ok) {
       console.error(`Failed to load ${page}.html: ${res.statusText}`);
       continue;
@@ -75,6 +75,14 @@ async function loadPartials() {
     const container = document.getElementById(`page-${page}`);
     if (container) {
       container.innerHTML = html;
+      // Execute any script tags inside the partial, as innerHTML doesn't run scripts automatically
+      const scripts = container.querySelectorAll('script');
+      scripts.forEach(oldScript => {
+        const newScript = document.createElement('script');
+        Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+        newScript.appendChild(document.createTextNode(oldScript.innerHTML));
+        oldScript.parentNode.replaceChild(newScript, oldScript);
+      });
     }
   }
 }
@@ -1462,6 +1470,99 @@ function saveLLMSettings() {
   .then(r => r.json())
   .then(d => { if (d.success) toast('Settings tersimpan!'); })
   .catch(e => toast(`Error: ${e.message}`, 'err'));
+}
+
+function saveDatasetSettings() {
+  const dsTypeSel = document.getElementById('set-dataset-type');
+  const payload = {
+    api_url: document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234',
+    api_key: document.getElementById('set-api-key').value.trim(),
+    model:   document.getElementById('set-model').value.trim(),
+    dataset_type: dsTypeSel ? dsTypeSel.value : 'object_detection'
+  };
+  fetch('/api/llm-settings', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(d => { if (d.success) toast('Dataset settings berhasil disimpan!'); })
+  .catch(e => toast(`Error: ${e.message}`, 'err'));
+}
+
+function checkDataset() {
+  if (!ds) {
+    toast('Silakan pilih dan muat dataset terlebih dahulu!', 'err');
+    return;
+  }
+  showLoader(true, 'Memindai dataset...');
+  fetch(`/api/dataset/${enc(ds.name)}/check-segment`)
+    .then(r => r.json())
+    .then(data => {
+      showLoader(false);
+      const count = data.count;
+      const images = data.images;
+      const type = data.dataset_type || 'object_detection';
+      
+      if (type === 'segment') {
+        if (count === 0) {
+          toast('Pengecekan selesai: Semua gambar telah menggunakan anotasi segment (Polygon)! ✓');
+        } else {
+          document.getElementById('confirm-title').textContent = 'Pindahkan Mismatch ke Staging';
+          document.getElementById('confirm-body').textContent = `Ditemukan ${count} gambar dengan anotasi Bounding Box (seharusnya Segment/Polygon). Apakah Anda ingin memindahkannya ke staging area ANNOTATE untuk diperbaiki?`;
+          const okBtn = document.getElementById('confirm-ok');
+          okBtn.className = 'btn btn-accent';
+          okBtn.textContent = 'Pindahkan';
+          openModal('confirm-modal');
+          okBtn.onclick = () => {
+            closeModal('confirm-modal');
+            executeMoveToAnnotate(images);
+          };
+        }
+      } else {
+        // object_detection
+        if (count === 0) {
+          toast('Pengecekan selesai: Semua gambar telah menggunakan anotasi Bounding Box! ✓');
+        } else {
+          document.getElementById('confirm-title').textContent = 'Pindahkan Mismatch ke Staging';
+          document.getElementById('confirm-body').textContent = `Ditemukan ${count} gambar dengan anotasi Segment/Polygon (seharusnya Bounding Box). Apakah Anda ingin memindahkannya ke staging area ANNOTATE untuk diperbaiki?`;
+          const okBtn = document.getElementById('confirm-ok');
+          okBtn.className = 'btn btn-accent';
+          okBtn.textContent = 'Pindahkan';
+          openModal('confirm-modal');
+          okBtn.onclick = () => {
+            closeModal('confirm-modal');
+            executeMoveToAnnotate(images);
+          };
+        }
+      }
+    })
+    .catch(e => {
+      showLoader(false);
+      toast(`Error: ${e.message}`, 'err');
+    });
+}
+
+function executeMoveToAnnotate(images) {
+  showLoader(true, 'Memindahkan gambar...');
+  fetch(`/api/dataset/${enc(ds.name)}/move-to-annotate`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ filenames: images })
+  })
+  .then(r => r.json())
+  .then(res => {
+    showLoader(false);
+    if (res.moved && res.moved.length > 0) {
+      toast(`Berhasil memindahkan ${res.moved.length} gambar ke staging area ANNOTATE!`);
+      loadDataset(ds.name, 'dataset', false);
+    } else {
+      toast('Gagal memindahkan gambar', 'err');
+    }
+  })
+  .catch(e => {
+    showLoader(false);
+    toast(`Error: ${e.message}`, 'err');
+  });
 }
 
 function testLLMConnection() {

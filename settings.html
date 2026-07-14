@@ -2,11 +2,15 @@
   <h2>Dataset Settings</h2>
   <p>Konfigurasi tipe dataset untuk fitur Annotation editor.</p>
   <div class="setting-group">
-    <label class="setting-label">Dataset Type</label>
+    <label class="setting-label">Dataset Category</label>
     <select class="setting-inp" id="set-dataset-type" style="width:100%;padding:9px 12px;background:rgba(0,0,0,.25);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-family:inherit;font-size:.95rem;transition:border-color .2s;cursor:pointer;">
       <option value="object_detection">Object Detection (Bounding Box)</option>
-      <option value="segment">Segmentation (Polygon)</option>
+      <option value="segment">Segment (Polygon)</option>
     </select>
+  </div>
+  <div class="settings-btn-row" style="margin-top:15px; margin-bottom:24px;">
+    <button class="btn btn-ghost" onclick="checkDataset()" id="set-ds-check-btn">Check Dataset</button>
+    <button class="btn btn-accent" onclick="saveDatasetSettings()">Save Dataset Settings</button>
   </div>
   
   <hr class="settings-divider">

@@ -210,7 +210,7 @@
     _imgEl = new Image();
     _imgEl.onload = () => { _fitImg(); _redraw(); _renderAnnList(); };
     _imgEl.onerror = () => { _imgEl = null; _redraw(); };
-    _imgEl.src = `/api/dataset/${encodeURIComponent(_ds.name)}/annotate/images/${encodeURIComponent(imgObj.filename)}`;
+    _imgEl.src = `/dataset/${encodeURIComponent(_ds.name)}/annotate/images/${encodeURIComponent(imgObj.filename)}`;
   }
 
   async function _fetchImgTags(filename) {
@@ -223,7 +223,7 @@
   function _fitImg() {
     const wrap = document.getElementById('ann2-canvas-wrap');
     const c = document.getElementById('ann2-canvas');
-    if (!wrap || !c || !_imgEl) return;
+    if (!wrap || !c || !_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     c.width = wrap.clientWidth; c.height = wrap.clientHeight;
     const sx = c.width/_imgEl.naturalWidth, sy = c.height/_imgEl.naturalHeight;
     _scale = Math.min(sx, sy) * 0.92;
@@ -292,7 +292,7 @@
 
   // ── Coords ──
   function _c2i(cx,cy) {
-    if(!_imgEl) return {x:0,y:0};
+    if(!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight || !_scale) return {x:0,y:0};
     return {x:(cx-_pan.x)/(_imgEl.naturalWidth*_scale), y:(cy-_pan.y)/(_imgEl.naturalHeight*_scale)};
   }
   function _i2c(ix,iy) {
@@ -449,7 +449,7 @@
     if(!canvas) return;
     const ctx=canvas.getContext('2d');
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    if(!_imgEl) return;
+    if(!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     ctx.drawImage(_imgEl,_pan.x,_pan.y,_imgEl.naturalWidth*_scale,_imgEl.naturalHeight*_scale);
 
     _anns.forEach((ann,idx)=>{
