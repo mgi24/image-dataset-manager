@@ -734,10 +734,13 @@ def save_llm_settings(settings: LLMSettings):
     return {"success": True}
 
 @app.get("/api/dataset/{dataset_name}/check-segment")
-def check_segment_dataset(dataset_name: str):
+def check_segment_dataset(dataset_name: str, type: Optional[str] = None):
     """Scan dataset for images that have annotations mismatched with the dataset category."""
-    cfg = _load_llm_settings_dict()
-    dataset_type = cfg.get("dataset_type", "object_detection")
+    if type:
+        dataset_type = type
+    else:
+        cfg = _load_llm_settings_dict()
+        dataset_type = cfg.get("dataset_type", "object_detection")
     
     dataset_path = safe_dataset_path(dataset_name)
     images_dir = os.path.join(dataset_path, 'images')

@@ -13,9 +13,16 @@
     <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
     
     <label style="font-size:.78rem;color:var(--text-muted);white-space:nowrap">Class:</label>
-    <select id="ann2-class-sel" style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-size:.82rem;padding:4px 8px;cursor:pointer;">
-      <option value="">— pilih —</option>
-    </select>
+    <div style="position:relative; width:160px;">
+      <input type="hidden" id="ann2-class-sel" value="">
+      <div id="ann2-premium-sel-trigger" onclick="ann2ToggleClassMenu(event)" style="display:flex; align-items:center; gap:8px; background:var(--bg-tertiary); border:1px solid rgba(239, 68, 68, 0.4); border-radius:8px; padding:6px 12px; cursor:pointer; box-shadow: 0 0 12px rgba(239, 68, 68, 0.25); transition: all 0.2s;">
+        <span id="ann2-class-color-dot" style="width:12px; height:12px; border-radius:50%; background:transparent; display:inline-block; border:1px solid rgba(255,255,255,0.1); transition: background 0.15s; flex-shrink:0;"></span>
+        <span id="ann2-class-sel-text" style="flex:1; font-size:.85rem; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">— pilih —</span>
+        <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:var(--text-muted)"><path d="M7,10L12,15L17,10H7Z"/></svg>
+      </div>
+      <div id="ann2-premium-sel-menu" style="display:none; position:absolute; top:calc(100% + 6px); left:0; width:100%; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index:9999; max-height:250px; overflow-y:auto; flex-direction:column; padding:6px;">
+      </div>
+    </div>
     <div style="flex:1;"></div>
     <button class="btn btn-accent" onclick="ann2Save()" id="ann2-save-btn" style="padding:5px 14px;font-size:.82rem;">
       <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor;margin-right:4px"><path d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z"/></svg>
@@ -83,8 +90,8 @@
 .ann2-ann-item.ann2-locked { opacity:.55; }
 .ann2-icon-btn { background:none; border:none; cursor:pointer; padding:2px; color:var(--text-muted); display:flex; align-items:center; border-radius:3px; flex-shrink:0; transition:color .12s, background .12s; }
 .ann2-icon-btn:hover { color:var(--text-primary); background:rgba(255,255,255,.08); }
-.ann2-del-btn { background:none; border:none; cursor:pointer; padding:2px; display:flex; align-items:center; border-radius:3px; flex-shrink:0; color:transparent; transition:color .12s; }
-.ann2-ann-item:hover .ann2-del-btn { color:var(--danger); }
+.ann2-del-btn { background:none; border:none; cursor:pointer; padding:2px; display:flex; align-items:center; border-radius:3px; flex-shrink:0; color:var(--text-muted); transition:color .12s; }
+.ann2-del-btn:hover { color:var(--danger); }
 .ann2-tag-chip { display:inline-flex; align-items:center; gap:4px; padding:2px 7px; background:rgba(99,102,241,.15); border:1px solid rgba(99,102,241,.28); border-radius:12px; font-size:.74rem; color:var(--accent-light); }
 .ann2-tag-chip button { background:none; border:none; color:var(--accent-light); cursor:pointer; padding:0; font-size:.9rem; line-height:1; opacity:.7; }
 .ann2-tag-chip button:hover { opacity:1; }
@@ -117,6 +124,7 @@
   let _drawing = false, _drawStart = null;
   let _polyPts = [];
   let _mouseImg = null;
+  let _polySnap = false;
   let _dragAnn = false, _dragAnnStart = null, _dragAnnOrig = null;
   let _dragCorner = -1, _dragCornerOrig = null;
 
@@ -165,14 +173,83 @@
 
   function _buildClassSel() {
     const sel = document.getElementById('ann2-class-sel');
-    if (!sel || !_ds) return;
-    sel.innerHTML = '<option value="">— pilih —</option>';
+    const menu = document.getElementById('ann2-premium-sel-menu');
+    if (!sel || !menu || !_ds) return;
+    
+    menu.innerHTML = '';
+    
+    const defOpt = document.createElement('div');
+    defOpt.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; border-radius:6px; font-size:.82rem; color:var(--text-primary); transition:background 0.15s;';
+    defOpt.onmouseover = () => { defOpt.style.background = 'var(--bg-tertiary)'; };
+    defOpt.onmouseout = () => { defOpt.style.background = 'transparent'; };
+    defOpt.innerHTML = `<span style="width:10px;height:10px;border-radius:50%;background:transparent;display:inline-block;border:1px solid rgba(255,255,255,0.1);flex-shrink:0;"></span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">— pilih —</span>`;
+    defOpt.onclick = (e) => { ann2SetClassVal('', e); };
+    menu.appendChild(defOpt);
+    
     (_ds.classes?.names || []).forEach((n, i) => {
-      const o = document.createElement('option');
-      o.value = i; o.textContent = n;
-      sel.appendChild(o);
+      const col = _clsColor(i);
+      const opt = document.createElement('div');
+      opt.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; border-radius:6px; font-size:.82rem; color:var(--text-primary); transition:background 0.15s;';
+      opt.onmouseover = () => { opt.style.background = 'var(--bg-tertiary)'; };
+      opt.onmouseout = () => { opt.style.background = 'transparent'; };
+      opt.innerHTML = `<span style="width:10px;height:10px;border-radius:50%;background:${col};display:inline-block;border:1px solid rgba(255,255,255,0.2);flex-shrink:0;"></span> <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${n}</span>`;
+      opt.onclick = (e) => { ann2SetClassVal(i, e); };
+      menu.appendChild(opt);
     });
+    
+    sel.removeEventListener('change', _updateClassDotColor);
+    sel.addEventListener('change', _updateClassDotColor);
+    _updateClassDotColor();
   }
+
+  function _updateClassDotColor() {
+    const sel = document.getElementById('ann2-class-sel');
+    const dot = document.getElementById('ann2-class-color-dot');
+    const text = document.getElementById('ann2-class-sel-text');
+    if (!sel || !dot || !text) return;
+    const cid = parseInt(sel.value);
+    if (isNaN(cid)) {
+      dot.style.background = 'transparent';
+      dot.style.borderColor = 'transparent';
+      text.textContent = '— pilih —';
+    } else {
+      const col = _clsColor(cid);
+      dot.style.background = col;
+      dot.style.borderColor = 'rgba(255,255,255,0.2)';
+      text.textContent = _ds?.classes?.names[cid] || `#${cid}`;
+    }
+  }
+
+  window.ann2ToggleClassMenu = function(e) {
+    e.stopPropagation();
+    const menu = document.getElementById('ann2-premium-sel-menu');
+    const trigger = document.getElementById('ann2-premium-sel-trigger');
+    if(menu.style.display === 'none') {
+      menu.style.display = 'flex';
+      trigger.style.boxShadow = '0 0 16px rgba(239, 68, 68, 0.4)';
+      trigger.style.borderColor = 'rgba(239, 68, 68, 0.8)';
+    } else {
+      menu.style.display = 'none';
+      trigger.style.boxShadow = '0 0 12px rgba(239, 68, 68, 0.25)';
+      trigger.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+    }
+  };
+
+  window.ann2SetClassVal = function(val, e) {
+    if(e) e.stopPropagation();
+    const sel = document.getElementById('ann2-class-sel');
+    if(sel) {
+      sel.value = val;
+      sel.dispatchEvent(new Event('change'));
+    }
+    const menu = document.getElementById('ann2-premium-sel-menu');
+    if(menu) menu.style.display = 'none';
+    const trigger = document.getElementById('ann2-premium-sel-trigger');
+    if(trigger) {
+      trigger.style.boxShadow = '0 0 12px rgba(239, 68, 68, 0.25)';
+      trigger.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+    }
+  };
 
   async function _fetchTags() {
     try { const r = await fetch('/api/tags'); _tags = await r.json(); }
@@ -248,6 +325,14 @@
       const sug = document.getElementById('ann2-tag-suggestions');
       const inp = document.getElementById('ann2-tag-input');
       if (sug && !sug.contains(e.target) && e.target!==inp) sug.style.display='none';
+      
+      const menu = document.getElementById('ann2-premium-sel-menu');
+      const trigger = document.getElementById('ann2-premium-sel-trigger');
+      if (menu && trigger && !menu.contains(e.target) && !trigger.contains(e.target)) {
+        menu.style.display = 'none';
+        trigger.style.boxShadow = '0 0 12px rgba(239, 68, 68, 0.25)';
+        trigger.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+      }
     });
   }
 
@@ -349,16 +434,33 @@
       const hi=_hitTest(ip.x,ip.y);
       if(hi>=0) {
         _selIdx=hi;
+        const sel = document.getElementById('ann2-class-sel');
+        if (sel && _anns[hi]) {
+          sel.value = _anns[hi].class_id;
+          if (typeof _updateClassDotColor === 'function') _updateClassDotColor();
+        }
         if(!_anns[hi].locked) { _dragAnn=true; _dragAnnStart={x:ip.x,y:ip.y}; _dragAnnOrig=_anns[hi].points.map(p=>[...p]); }
         _redraw(); _renderAnnList(); return;
       }
       if(_tool==='drag') { _selIdx=-1; _redraw(); _renderAnnList(); return; }
     }
     const cid=parseInt(document.getElementById('ann2-class-sel')?.value);
-    if(isNaN(cid)||!_ds?.classes?.names[cid]) { _selIdx=-1; _redraw(); _renderAnnList(); return; }
+    if(isNaN(cid)||!_ds?.classes?.names[cid]) { 
+      if(window.toast) toast('Pilih class terlebih dahulu', 'err');
+      _selIdx=-1; _redraw(); _renderAnnList(); return; 
+    }
     if(_tool==='bbox') { _drawing=true; _drawStart={x:_clp(ip.x),y:_clp(ip.y)}; return; }
     if(_tool==='polygon') {
       if(!_drawing) { _drawing=true; _polyPts=[]; const ph=document.getElementById('ann2-poly-hint'); if(ph) ph.style.display=''; }
+      
+      if (_drawing && _polyPts.length >= 3) {
+        const firstPt = _i2c(_polyPts[0][0], _polyPts[0][1]);
+        const mc = _i2c(_clp(ip.x), _clp(ip.y));
+        const dx = mc.x - firstPt.x, dy = mc.y - firstPt.y;
+        if (dx*dx + dy*dy <= 144) {
+          _closePoly(); return;
+        }
+      }
       _polyPts.push([_clp(ip.x),_clp(ip.y)]); _redraw(); return;
     }
   }
@@ -506,15 +608,33 @@
     // In-progress polygon
     if(_drawing&&_tool==='polygon'&&_polyPts.length>0) {
       const col=_selColor();
-      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+      
+      _polySnap = false;
+      if(_mouseImg && _polyPts.length >= 3) {
+        const firstPt = _i2c(_polyPts[0][0], _polyPts[0][1]);
+        const mc = _i2c(_clp(_mouseImg.x), _clp(_mouseImg.y));
+        const dx = mc.x - firstPt.x, dy = mc.y - firstPt.y;
+        if (dx*dx + dy*dy <= 144) _polySnap = true;
+      }
+
+      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=1.5;
       ctx.beginPath();
       _polyPts.forEach((p,pi)=>{const c=_i2c(p[0],p[1]); pi===0?ctx.moveTo(c.x,c.y):ctx.lineTo(c.x,c.y);});
-      if(_mouseImg){const mc=_i2c(_clp(_mouseImg.x),_clp(_mouseImg.y)); ctx.lineTo(mc.x,mc.y);}
-      ctx.stroke(); ctx.setLineDash([]);
+      if(_mouseImg){
+        const mc = _polySnap ? _i2c(_polyPts[0][0], _polyPts[0][1]) : _i2c(_clp(_mouseImg.x),_clp(_mouseImg.y));
+        ctx.lineTo(mc.x,mc.y);
+      }
+      ctx.stroke();
       _polyPts.forEach((p,pi)=>{
         const c=_i2c(p[0],p[1]);
-        ctx.fillStyle=pi===0?'#fff':col; ctx.beginPath(); ctx.arc(c.x,c.y,pi===0?5:3.5,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.stroke();
+        if (pi === 0 && _polySnap) {
+            ctx.fillStyle='#fbbf24';
+            ctx.beginPath(); ctx.arc(c.x,c.y,8,0,Math.PI*2); ctx.fill();
+            ctx.strokeStyle='#f59e0b'; ctx.lineWidth=2; ctx.stroke();
+        } else {
+            ctx.fillStyle=pi===0?'#fff':col; ctx.beginPath(); ctx.arc(c.x,c.y,pi===0?5:3.5,0,Math.PI*2); ctx.fill();
+            ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.stroke();
+        }
       });
       ctx.restore();
     }
@@ -541,7 +661,16 @@
       const name=_ds?.classes?.names[ann.class_id]||`#${ann.class_id}`;
       const item=document.createElement('div');
       item.className='ann2-ann-item'+(idx===_selIdx?' ann2-selected':'')+(ann.locked?' ann2-locked':'');
-      item.onclick=()=>{_selIdx=idx;_redraw();_renderAnnList();};
+      item.onclick=()=>{
+        _selIdx=idx;
+        const sel = document.getElementById('ann2-class-sel');
+        if (sel && ann) {
+          sel.value = ann.class_id;
+          if (typeof _updateClassDotColor === 'function') _updateClassDotColor();
+        }
+        _redraw();
+        _renderAnnList();
+      };
       const dot=document.createElement('span');
       dot.style.cssText=`width:9px;height:9px;border-radius:2px;background:${col};flex-shrink:0;display:inline-block;`;
       const typeEl=document.createElement('span');
