@@ -697,13 +697,23 @@
   async function _runMagicPredict() {
     if(!_ds||!_images.length) return;
     const imgObj = _images[_idx];
+    const cid = parseInt(document.getElementById('ann2-class-sel')?.value);
+    const className = _ds?.classes?.names[cid];
+    if (!className) {
+      if (window.toast) toast('Pilih class terlebih dahulu', 'err');
+      return;
+    }
     _magicLoading = true;
     _redraw();
     try {
       const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-predict`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({filename: imgObj.filename, points: _magicPts})
+        body: JSON.stringify({
+          filename: imgObj.filename,
+          class_name: className,
+          points: _magicPts
+        })
       });
       const data = await resp.json();
       if(resp.ok && data.success && data.polygons && data.polygons.length > 0) {
