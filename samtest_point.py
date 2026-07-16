@@ -101,8 +101,8 @@ def main():
 
         model_path = "sam3.pt"
         if not os.path.exists(model_path):
-            print(f"'{model_path}' not found locally. Falling back to public model 'sam2_b.pt' (will auto-download)...")
-            model_path = "sam2_b.pt"
+            print(f"Error: {model_path} not found. Please make sure the sam3.pt file exists in the workspace directory.")
+            return
 
         print(f"Loading {model_path} model...")
         model = SAM(model_path)
