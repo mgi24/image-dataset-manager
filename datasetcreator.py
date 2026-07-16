@@ -897,12 +897,8 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         # Use largest contour
         largest = max(contours, key=cv2.contourArea)
 
-        # Simplify with approxPolyDP
-        epsilon = 0.005 * cv2.arcLength(largest, True)
-        approx = cv2.approxPolyDP(largest, epsilon, True)
-
         # Normalize to [0,1]
-        polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in approx]
+        polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in largest]
 
         if len(polygon) < 3:
             return {"success": False, "error": "Polygon too small", "polygons": []}
