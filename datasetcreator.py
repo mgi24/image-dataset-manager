@@ -831,8 +831,11 @@ def _get_sam_model():
     if _sam_model is None:
         with _sam_model_lock:
             if _sam_model is None:
+                model_path = os.path.join(BASE_DIR, "sam3.pt")
+                if not os.path.exists(model_path):
+                    raise HTTPException(status_code=503, detail="sam3.pt not found")
                 from ultralytics import SAM
-                _sam_model = SAM("sam2_b.pt")
+                _sam_model = SAM(model_path)
     return _sam_model
 
 
