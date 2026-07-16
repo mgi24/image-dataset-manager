@@ -874,7 +874,13 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         pt_coords = [[int(p["x"] * w), int(p["y"] * h)] for p in payload.points]
         pt_labels = [int(p["label"]) for p in payload.points]
 
-        results = model(image_path, points=pt_coords, labels=pt_labels, device="cuda")
+        results = model(
+            image_path, 
+            points=pt_coords, 
+            labels=pt_labels, 
+            device="cuda", 
+            imgsz=max(h, w)
+        )
 
         if not results or results[0].masks is None or len(results[0].masks) == 0:
             return {"success": False, "error": "No mask generated", "polygons": []}
