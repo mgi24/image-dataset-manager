@@ -822,35 +822,29 @@ class SamPredictRequest(BaseModel):
     filename: str
     points: list   # [{"x": float, "y": float, "label": int}, ...]  label=1 positive, label=0 negative
 
-# Lazy singleton predictor – loaded once, reused across requests
-_sam_predictor = None
-_sam_predictor_lock = threading.Lock()
+# Lazy singleton SAM model – loaded once, reused across requests
+_sam_model = None
+_sam_model_lock = threading.Lock()
 
-def _get_sam_predictor():
-    global _sam_predictor
-    if _sam_predictor is None:
-        with _sam_predictor_lock:
-            if _sam_predictor is None:
+def _get_sam_model():
+    global _sam_model
+    if _sam_model is None:
+        with _sam_model_lock:
+            if _sam_model is None:
                 model_path = os.path.join(BASE_DIR, "sam3.1.pt")
                 if not os.path.exists(model_path):
-                    raise HTTPException(status_code=503, detail="sam3.1.pt not found")
-                from ultralytics.models.sam import SAM3SemanticPredictor
-                overrides = dict(
-                    conf=0.5,
-                    task="segment",
-                    mode="predict",
-                    model=model_path,
-                    save=False,
-                    device="cuda",
-                    half=False,
-                )
-                _sam_predictor = SAM3SemanticPredictor(overrides=overrides)
-    return _sam_predictor
+                    raise RuntimeError("sam3.1.pt not found")
+                from ultralytics import SAM
+                _sam_model = SAM(model_path)
+    return _sam_model
 
 
 @app.post("/api/dataset/{dataset_name}/sam-predict")
 def sam_predict(dataset_name: str, payload: SamPredictRequest):
     """Run SAM 3.1 point-to-segment on a single image and return normalized polygon points."""
+    import cv2
+    import numpy as np
+
     dataset_path = safe_dataset_path(dataset_name)
 
     # Resolve image path (annotate/images first, then images)
@@ -868,61 +862,62 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         raise HTTPException(status_code=400, detail="At least one point required")
 
     try:
-        import cv2
-        import numpy as np
+        model = _get_sam_model()
 
-        predictor = _get_sam_predictor()
-
-        # Read image to get dimensions
+        # Read image dimensions
         img = cv2.imread(image_path)
         if img is None:
             raise HTTPException(status_code=500, detail="Cannot read image")
         h, w = img.shape[:2]
 
-        # Build point arrays (pixel coords)
+        # Build pixel-space point arrays
         pt_coords = [[int(p["x"] * w), int(p["y"] * h)] for p in payload.points]
         pt_labels = [int(p["label"]) for p in payload.points]
 
-        predictor.set_image(image_path)
-        results = predictor(points=[pt_coords], labels=[pt_labels])
+        # Run SAM with point prompts
+        results = model(
+            image_path,
+            points=[pt_coords],
+            labels=[pt_labels],
+            device="cuda",
+        )
 
         if not results or results[0].masks is None or len(results[0].masks) == 0:
             return {"success": False, "error": "No mask generated", "polygons": []}
 
-        # Pick the mask with highest confidence
-        masks_data = results[0].masks.data.cpu().numpy()  # shape (N, H, W)
-        confs = results[0].boxes.conf.cpu().numpy() if results[0].boxes is not None and results[0].boxes.conf is not None else [1.0] * len(masks_data)
-        best_idx = int(np.argmax(confs))
-        mask = masks_data[best_idx].astype(np.uint8)
+        # masks.xy returns list of numpy arrays (polygon contours in pixel space)
+        polygons_xy = results[0].masks.xy  # list of ndarray shape (N, 2)
 
-        # Resize mask to original image dimensions if needed
-        if mask.shape[0] != h or mask.shape[1] != w:
-            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+        if not polygons_xy or len(polygons_xy) == 0:
+            return {"success": False, "error": "No polygon extracted", "polygons": []}
 
-        # Find contours → polygon
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return {"success": False, "error": "No contour found", "polygons": []}
+        # Pick the largest polygon by area
+        best = max(polygons_xy, key=lambda p: cv2.contourArea(p.astype(np.float32)))
 
-        # Use largest contour
-        largest = max(contours, key=cv2.contourArea)
+        if len(best) < 3:
+            return {"success": False, "error": "Polygon too small", "polygons": []}
 
         # Simplify with approxPolyDP
-        epsilon = 0.005 * cv2.arcLength(largest, True)
-        approx = cv2.approxPolyDP(largest, epsilon, True)
+        best_int = best.astype(np.int32).reshape((-1, 1, 2))
+        epsilon = 0.003 * cv2.arcLength(best_int, True)
+        approx = cv2.approxPolyDP(best_int, epsilon, True)
 
-        # Normalize to [0,1]
+        if len(approx) < 3:
+            approx = best_int  # fall back to original if over-simplified
+
+        # Normalize to [0, 1]
         polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in approx]
-
-        if len(polygon) < 3:
-            return {"success": False, "error": "Polygon too small", "polygons": []}
 
         return {"success": True, "polygons": [polygon]}
 
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"SAM error: {str(e)}")
+
+
 
 
 # ─────────────────────────────────────────────
