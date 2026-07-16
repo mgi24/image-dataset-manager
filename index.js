@@ -278,16 +278,42 @@ function switchPage(p, pushNav = true) {
 
   // Update URL
   if (ds) navigate(`/${enc(ds.name)}/${p}`, !pushNav);
-  if (p === 'annotation' && ds && !annData) loadAnnotatePage();
+  
+  if (p === 'annotation' && ds) {
+    if (!annData) {
+      loadAnnotatePage();
+    } else {
+      renderStats(annData.images, 'ann-stats', false);
+      refreshClassFilterDropdown();
+      refreshTagsFilterDropdown();
+      applyFilters();
+    }
+  }
+  if (p === 'dataset' && ds) {
+    renderStats(ds.images, 'ds-stats', true);
+    refreshClassFilterDropdown();
+    refreshTagsFilterDropdown();
+    applyFilters();
+  }
+  
   if (p === 'annotate2' && ds) {
     if (annData && annData.images) {
       if (window.initAnn2) initAnn2({ name: ds.name, classes: annData.classes }, annData.images);
     } else {
-      fetch(`/api/dataset/${enc(ds.name)}/annotate`)
-        .then(r => r.json())
-        .then(data => {
+      Promise.all([
+        fetch(`/api/dataset/${enc(ds.name)}/annotate`).then(r => r.json()),
+        fetch(`/api/dataset/${enc(ds.name)}/tags`).then(r => r.json())
+      ])
+        .then(([data, tagsMapping]) => {
+          const images = (data.images || []).map(img => {
+            return {
+              ...img,
+              tags: tagsMapping[img.filename] || []
+            };
+          });
           annData = data;
-          if (window.initAnn2) initAnn2({ name: ds.name, classes: data.classes }, data.images);
+          annData.images = images;
+          if (window.initAnn2) initAnn2({ name: ds.name, classes: data.classes }, images);
         })
         .catch(() => toast('Gagal memuat annotate2', 'err'));
     }
@@ -296,19 +322,35 @@ function switchPage(p, pushNav = true) {
 
 function loadAnnotatePage() {
   showLoader(true, 'Memuat folder annotate…');
-  fetch(`/api/dataset/${enc(ds.name)}/annotate`)
-    .then(r => r.json())
-    .then(data => {
+  Promise.all([
+    fetch(`/api/dataset/${enc(ds.name)}/annotate`).then(r => r.json()),
+    fetch(`/api/dataset/${enc(ds.name)}/tags`).then(r => r.json())
+  ])
+    .then(([data, tagsMapping]) => {
       annData = data;
-      renderStats(data.images, 'ann-stats', false);
-      renderDist(data.images, ds.classes, 'ann-dist');
-      filteredAnnImgs = [...data.images];
+      const images = (data.images || []).map(img => {
+        return {
+          ...img,
+          tags: tagsMapping[img.filename] || []
+        };
+      });
+      annData.images = images;
+      renderStats(images, 'ann-stats', false);
+      renderDist(images, ds.classes, 'ann-dist');
+      filteredAnnImgs = [...images];
       clearGrid('ann-grid-inner', 'ann-sentinel');
       loadedAnn = 0;
       showLoader(false);
-      loadBatchAnn();
+      
+      refreshClassFilterDropdown();
+      refreshTagsFilterDropdown();
+      applyFilters();
     })
-    .catch(() => { showLoader(false); toast('Gagal memuat annotate', 'err'); });
+    .catch((err) => {
+      console.error(err);
+      showLoader(false);
+      toast('Gagal memuat annotate', 'err');
+    });
 }
 
 // ═══════════════════════════════════════════
@@ -328,7 +370,8 @@ function renderStats(images, containerId, showUnlabelled) {
     el.innerHTML = html;
   }
 
-  if (containerId === 'ds-stats') {
+  const activeStatsId = (currentPage === 'annotation') ? 'ann-stats' : 'ds-stats';
+  if (containerId === activeStatsId) {
     const unlabelled = total - labelled;
     updateLabeledFilterMenu(total, labelled, unlabelled);
   }
@@ -385,7 +428,15 @@ function setLabeledFilter(val) {
   labeledFilter = val;
   const menu = document.getElementById('labeled-filter-menu');
   if (menu) menu.classList.remove('show');
-  renderStats(ds.images, 'ds-stats', true);
+  if (currentPage === 'annotation') {
+    if (annData && annData.images) {
+      renderStats(annData.images, 'ann-stats', false);
+    }
+  } else {
+    if (ds && ds.images) {
+      renderStats(ds.images, 'ds-stats', true);
+    }
+  }
   applyFilters();
 }
 
@@ -482,7 +533,8 @@ function buildPills() {
 
 function applyFilters() {
   if (!ds) return;
-  let imgs = ds.images;
+  const isAnn = (currentPage === 'annotation');
+  let imgs = isAnn ? (annData ? annData.images : []) : ds.images;
 
   if (clsFilters.size > 0) {
     imgs = imgs.filter(img => img.annotations.some(a => clsFilters.has(a.class_id)));
@@ -509,10 +561,17 @@ function applyFilters() {
     imgs = imgs.filter(img => img.filename.toLowerCase().includes(q));
   }
 
-  filteredImgs = imgs;
-  clearGrid('ds-grid-inner', 'ds-sentinel');
-  loadedMain = 0;
-  loadBatchMain();
+  if (isAnn) {
+    filteredAnnImgs = imgs;
+    clearGrid('ann-grid-inner', 'ann-sentinel');
+    loadedAnn = 0;
+    loadBatchAnn();
+  } else {
+    filteredImgs = imgs;
+    clearGrid('ds-grid-inner', 'ds-sentinel');
+    loadedMain = 0;
+    loadBatchMain();
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -1074,18 +1133,17 @@ function refreshTagsFilterDropdown() {
       // Compute counts of each tag in current dataset
       const localCounts = {};
       let localUntaggedCount = 0;
-      if (ds && ds.images) {
-        ds.images.forEach(img => {
-          const tList = img.tags || [];
-          if (tList.length === 0) {
-            localUntaggedCount++;
-          } else {
-            tList.forEach(t => {
-              localCounts[t] = (localCounts[t] || 0) + 1;
-            });
-          }
-        });
-      }
+      const currentImgs = (currentPage === 'annotation' && annData) ? annData.images : (ds ? ds.images : []);
+      currentImgs.forEach(img => {
+        const tList = img.tags || [];
+        if (tList.length === 0) {
+          localUntaggedCount++;
+        } else {
+          tList.forEach(t => {
+            localCounts[t] = (localCounts[t] || 0) + 1;
+          });
+        }
+      });
 
       // Add "untagged" option
       const untaggedItem = document.createElement('div');

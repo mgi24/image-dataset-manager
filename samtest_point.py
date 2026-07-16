@@ -23,17 +23,19 @@ labels = []
 model = None
 image_path = ""
 img_orig = None
+baked_img = None
+current_mask_result = None
 scale = 1.0
-window_name = "SAM Visual Prompting (Click: Pos, Ctrl+Click: Neg, R: Reset, Esc: Exit)"
+window_name = "SAM Visual Prompting (Click: Pos, Ctrl+Click: Neg, Enter: Confirm, R: Reset, Esc: Exit)"
 
 def run_prediction():
-    global points, labels, img_orig, scale, window_name
+    global points, labels, baked_img, scale, window_name, current_mask_result
     if not points:
-        # Show original image resized
-        h, w = img_orig.shape[:2]
+        # Show baked image resized
+        h, w = baked_img.shape[:2]
         display_w = int(w * scale)
         display_h = int(h * scale)
-        display_img = cv2.resize(img_orig, (display_w, display_h))
+        display_img = cv2.resize(baked_img, (display_w, display_h))
         cv2.imshow(window_name, display_img)
         return
 
@@ -44,11 +46,15 @@ def run_prediction():
         points=points,
         labels=labels,
         device="cuda",
-        verbose=False
+        verbose=True
     )
+    current_mask_result = results[0]
     
-    # Plot predictions
-    res_img = results[0].plot(labels=False, boxes=False)
+    # Plot predictions on top of our baked_img
+    try:
+        res_img = current_mask_result.plot(img=baked_img.copy(), labels=False, boxes=False)
+    except TypeError:
+        res_img = current_mask_result.plot(labels=False, boxes=False)
     
     # Draw points on res_img before resizing
     for pt, lbl in zip(points, labels):
@@ -85,13 +91,15 @@ def on_mouse(event, x, y, flags, param):
         run_prediction()
 
 def main():
-    global model, image_path, img_orig, scale, points, labels
+    global model, image_path, img_orig, baked_img, scale, points, labels, current_mask_result
     try:
         image_path = load_first_image()
         img_orig = cv2.imread(image_path)
         if img_orig is None:
             print("Error: Could not read image.")
             return
+
+        baked_img = img_orig.copy()
 
         h, w = img_orig.shape[:2]
         # Calculate scale to fit inside 1280x720 window
@@ -118,17 +126,31 @@ def main():
         print("\nControls:")
         print(" - Click on image to add POSITIVE point (green)")
         print(" - Ctrl+Click to add NEGATIVE point (red)")
-        print(" - Press 'r' to reset points")
+        print(" - Press 'Enter' to confirm object and start a new one")
+        print(" - Press 'r' to reset points (and clear all objects)")
         print(" - Press 'Esc' or any other key to close")
 
         while True:
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # Esc
                 break
+            elif key == 13: # Enter
+                if current_mask_result is not None:
+                    print("Object confirmed! Starting new object.")
+                    try:
+                        baked_img = current_mask_result.plot(img=baked_img.copy(), labels=False, boxes=False)
+                    except TypeError:
+                        baked_img = current_mask_result.plot(labels=False, boxes=False)
+                    points = []
+                    labels = []
+                    current_mask_result = None
+                    run_prediction()
             elif key == ord('r') or key == ord('R'):
                 print("Resetting points...")
                 points = []
                 labels = []
+                current_mask_result = None
+                baked_img = img_orig.copy()
                 run_prediction()
             
             # Check if window is closed
