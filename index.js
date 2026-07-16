@@ -878,9 +878,14 @@ function saveClasses() {
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span> Menyimpan…`;
   const names = [], colors = [];
-  document.querySelectorAll('.cls-row').forEach(r => {
-    names.push(r.querySelector('.cls-name-inp').value.trim() || `class_${r.dataset.i}`);
-    colors.push(r.querySelector('.col-inp').value);
+  const rows = document.querySelectorAll('#cls-list .cls-row');
+  console.log("saveClasses: found rows in #cls-list", rows.length);
+  rows.forEach(r => {
+    const nameInp = r.querySelector('.cls-name-inp');
+    const colInp = r.querySelector('.col-inp');
+    console.log("Processing row:", r, "nameInp:", nameInp, "colInp:", colInp);
+    names.push((nameInp ? nameInp.value.trim() : "") || `class_${r.dataset.i}`);
+    colors.push(colInp ? colInp.value : "#000000");
   });
   fetch(`/api/dataset/${enc(ds.name)}/classes`, {
     method: 'POST',

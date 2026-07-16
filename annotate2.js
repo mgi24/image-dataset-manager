@@ -235,6 +235,17 @@
     } catch (e) { _curTags = []; }
   }
 
+  function _fitImg() {
+    const wrap = document.getElementById('ann2-canvas-wrap');
+    const c = document.getElementById('ann2-canvas');
+    if (!wrap || !c || !_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
+    c.width = wrap.clientWidth; c.height = wrap.clientHeight;
+    const sx = c.width / _imgEl.naturalWidth, sy = c.height / _imgEl.naturalHeight;
+    _scale = Math.min(sx, sy) * 0.92;
+    _pan.x = (c.width - _imgEl.naturalWidth * _scale) / 2;
+    _pan.y = (c.height - _imgEl.naturalHeight * _scale) / 2;
+  }
+
   // ── Canvas Setup ──
   function _setupCanvas() {
     const c = document.getElementById('ann2-canvas');
