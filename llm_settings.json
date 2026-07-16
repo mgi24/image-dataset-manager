@@ -2,5 +2,6 @@
   "api_url": "http://127.0.0.1:1234",
   "api_key": "",
   "model": "gemma-4-26b-a4b-it-qat",
-  "dataset_type": "segment"
+  "dataset_type": "object_detection",
+  "autosave": false
 }

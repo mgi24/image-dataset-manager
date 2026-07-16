@@ -82,6 +82,7 @@ class LLMSettings(BaseModel):
     api_key: Optional[str] = ""
     model: Optional[str] = ""
     dataset_type: Optional[str] = "object_detection"
+    autosave: Optional[bool] = False
 
 class MoveImagesRequest(BaseModel):
     filenames: List[str]

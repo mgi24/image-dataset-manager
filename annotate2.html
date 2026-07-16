@@ -2,7 +2,7 @@
 <div id="ann2-root" style="display:flex; flex-direction:column; height:100%; min-height:0; position:relative;">
 
   <!-- Toolbar row -->
-  <div id="ann2-toolbar" style="display:flex; align-items:center; gap:6px; padding:6px 10px; background:var(--bg-secondary); border-bottom:1px solid var(--border); flex-shrink:0;">
+  <div id="ann2-toolbar" style="display:flex; align-items:center; gap:6px; padding:6px 10px; background:var(--bg-secondary); border-bottom:1px solid var(--border); flex-shrink:0; position:sticky; top:0; z-index:1000;">
     <button class="tog-btn" id="ann2-prev-btn" onclick="ann2Prev()" title="Previous (A)">
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/></svg>
     </button>
@@ -24,6 +24,15 @@
       </div>
     </div>
     <div style="flex:1;"></div>
+    
+    <div id="ann2-hint-text" style="font-size:.7rem; color:var(--text-muted); margin-right:12px; white-space:nowrap; transition: all 0.15s;">
+      Scroll = zoom · H = pan
+    </div>
+
+    <label style="font-size:.78rem;color:var(--text-muted);white-space:nowrap;display:flex;align-items:center;gap:6px;cursor:pointer;margin-right:12px;user-select:none;">
+      <input type="checkbox" id="ann2-autosave-chk" onchange="ann2ToggleAutosave(this.checked)" style="cursor:pointer;width:14px;height:14px;margin:0;">
+      Autosave
+    </label>
     <button class="btn btn-accent" onclick="ann2Save()" id="ann2-save-btn" style="padding:5px 14px;font-size:.82rem;">
       <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor;margin-right:4px"><path d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z"/></svg>
       Save (Ctrl+S)
@@ -39,18 +48,16 @@
         Annotations
         <span id="ann2-ann-count" style="background:var(--bg-tertiary);border-radius:9px;padding:1px 7px;font-size:.68rem;color:var(--text-secondary);">0</span>
       </div>
-      <div id="ann2-ann-list" style="flex:1; overflow-y:auto; padding:6px 0;"></div>
+      <div id="ann2-ann-list" style="flex:0 1 auto; overflow-y:auto; padding:6px 0;"></div>
 
       <!-- Tags section -->
       <div style="border-top:1px solid var(--border); flex-shrink:0;">
         <div style="padding:8px 12px 5px; font-size:.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.07em;">Tags</div>
         <div id="ann2-tags-area" style="padding:0 8px 6px; display:flex; flex-wrap:wrap; gap:4px; min-height:28px;"></div>
-        <div style="padding:0 8px 10px; position:relative;">
-          <input type="text" id="ann2-tag-input" placeholder="Tambah tag..."
-            style="width:100%;padding:5px 8px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;font-size:.8rem;box-sizing:border-box;"
-            oninput="ann2FilterTagSuggestions(this.value)"
-            onkeydown="ann2TagKeydown(event)">
-          <div id="ann2-tag-suggestions" style="display:none;position:absolute;bottom:100%;left:8px;right:8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;max-height:120px;overflow-y:auto;z-index:200;box-shadow:var(--shadow);margin-bottom:2px;"></div>
+        <div style="padding:0 8px 10px;">
+          <select id="ann2-tag-sel" style="width:100%;padding:5px 8px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;font-size:.8rem;box-sizing:border-box;cursor:pointer;" onchange="ann2AddSelectedTag(this)">
+            <option value="">+ Tambah tag...</option>
+          </select>
         </div>
       </div>
     </div>
@@ -70,14 +77,12 @@
         <button class="tog-btn ann2-tool-btn" id="ann2-tool-polygon" onclick="ann2SetTool('polygon')" title="Polygon (P) - Buat anotasi segmentasi poligon" style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
           <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M2,2H8V4.26L14.74,8H18V10L22,14L18.93,17.07L16,14.14V16H13.26L10,19.26V22H4V16H6.74L10,12.74V10.26L3.26,8H2V2M4,4V6H5.74L12.74,9.26V13L10,15.74V18H6V14.26L2.74,11H2H4V10V4M14,2H22V10H14V2M16,4V8H20V4H16M4,18H8V22H4V18Z"/></svg>
         </button>
+        <button class="tog-btn ann2-tool-btn" id="ann2-tool-edit" onclick="ann2SetTool('edit')" title="Edit Mode (E) - Edit dan geser anotasi serta titik kontrol" style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
+          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M13.64,21.97C13.14,22.21 12.54,22 12.31,21.5L10.13,16.76L7.62,19.27C7.23,19.66 6.58,19.66 6.19,19.27C6,19.08 5.9,18.83 5.9,18.57V3.5C5.9,2.95 6.35,2.5 6.9,2.5C7.16,2.5 7.41,2.6 7.6,2.79L18.58,13.77C18.97,14.16 18.97,14.81 18.58,15.2C18.39,15.39 18.14,15.49 17.88,15.49H14.88L17.07,20.23C17.3,20.73 17.1,21.33 16.6,21.56L13.64,21.97Z"/></svg>
+        </button>
       </div>
 
-      <div id="ann2-poly-hint" style="display:none; position:absolute; bottom:12px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.72); color:#fff; font-size:.78rem; padding:5px 14px; border-radius:20px; pointer-events:none; white-space:nowrap; z-index:90;">
-        Click to add points · Enter = close · Esc = cancel
-      </div>
-      <div style="position:absolute; bottom:10px; right:10px; font-size:.7rem; color:rgba(255,255,255,.35); pointer-events:none; z-index:90;">
-        Scroll = zoom · H = pan
-      </div>
+
     </div>
   </div>
 </div>
@@ -88,6 +93,7 @@
 .ann2-ann-item:hover { background:var(--bg-tertiary); }
 .ann2-ann-item.ann2-selected { background:rgba(99,102,241,.18); border-color:rgba(99,102,241,.35); }
 .ann2-ann-item.ann2-locked { opacity:.55; }
+.ann2-ann-item.dragging { opacity:0.4; background:var(--bg-tertiary); border:1px dashed var(--border); }
 .ann2-icon-btn { background:none; border:none; cursor:pointer; padding:2px; color:var(--text-muted); display:flex; align-items:center; border-radius:3px; flex-shrink:0; transition:color .12s, background .12s; }
 .ann2-icon-btn:hover { color:var(--text-primary); background:rgba(255,255,255,.08); }
 .ann2-del-btn { background:none; border:none; cursor:pointer; padding:2px; display:flex; align-items:center; border-radius:3px; flex-shrink:0; color:var(--text-muted); transition:color .12s; }
@@ -114,6 +120,8 @@
   let _tags = [];
   let _curTags = [];
   let _datasetType = 'object_detection'; // default setting
+  let _autosave = false;
+  let _hoverIdx = -1;
 
   // Canvas transform
   let _pan = {x:0, y:0};
@@ -153,9 +161,13 @@
       if (r.ok) {
         const s = await r.json();
         _datasetType = s.dataset_type || 'object_detection';
+        _autosave = !!s.autosave;
+        const chk = document.getElementById('ann2-autosave-chk');
+        if (chk) chk.checked = _autosave;
       }
     } catch(e) {
       _datasetType = 'object_detection';
+      _autosave = false;
     }
     
     // Visually disable or hide restricted buttons
@@ -197,9 +209,9 @@
       menu.appendChild(opt);
     });
     
-    sel.removeEventListener('change', _updateClassDotColor);
-    sel.addEventListener('change', _updateClassDotColor);
-    _updateClassDotColor();
+    sel.removeEventListener('change', _onClassChange);
+    sel.addEventListener('change', _onClassChange);
+    _onClassChange();
   }
 
   function _updateClassDotColor() {
@@ -217,6 +229,25 @@
       dot.style.background = col;
       dot.style.borderColor = 'rgba(255,255,255,0.2)';
       text.textContent = _ds?.classes?.names[cid] || `#${cid}`;
+    }
+  }
+
+  function _onClassChange() {
+    _updateClassDotColor();
+    const sel = document.getElementById('ann2-class-sel');
+    if (!sel) return;
+    const cid = parseInt(sel.value);
+    if (_tool === 'edit' && _selIdx >= 0 && _anns[_selIdx]) {
+      if (!isNaN(cid) && !_anns[_selIdx].locked) {
+        if (_anns[_selIdx].class_id !== cid) {
+          _anns[_selIdx].class_id = cid;
+          _redraw();
+          _renderAnnList();
+          if (_autosave) {
+            ann2Save();
+          }
+        }
+      }
     }
   }
 
@@ -252,7 +283,11 @@
   };
 
   async function _fetchTags() {
-    try { const r = await fetch('/api/tags'); _tags = await r.json(); }
+    try { 
+      const r = await fetch('/api/tags'); 
+      _tags = await r.json(); 
+      if(typeof window._renderTagSelect === 'function') window._renderTagSelect();
+    }
     catch(e) { _tags = []; }
   }
 
@@ -322,10 +357,6 @@
     c.addEventListener('dblclick', _onDbl);
     c.addEventListener('contextmenu', e => { e.preventDefault(); if(_tool==='polygon') _cancelPoly(); });
     document.addEventListener('click', e => {
-      const sug = document.getElementById('ann2-tag-suggestions');
-      const inp = document.getElementById('ann2-tag-input');
-      if (sug && !sug.contains(e.target) && e.target!==inp) sug.style.display='none';
-      
       const menu = document.getElementById('ann2-premium-sel-menu');
       const trigger = document.getElementById('ann2-premium-sel-trigger');
       if (menu && trigger && !menu.contains(e.target) && !trigger.contains(e.target)) {
@@ -346,8 +377,9 @@
       if (k==='h'||k==='H') _setTool('drag');
       if ((k==='b'||k==='B') && _datasetType !== 'segment') _setTool('bbox');
       if ((k==='p'||k==='P') && _datasetType !== 'object_detection') _setTool('polygon');
-      if (k==='ArrowLeft'||k==='a'||k==='A') ann2Prev();
-      if (k==='ArrowRight'||k==='d'||k==='D') ann2Next();
+      if (k==='e'||k==='E') _setTool('edit');
+      if (k==='ArrowLeft') ann2Prev();
+      if (k==='ArrowRight') ann2Next();
       if ((e.ctrlKey||e.metaKey)&&k==='s') { e.preventDefault(); ann2Save(); }
       if (k==='Enter'&&_tool==='polygon'&&_polyPts.length>=3) _closePoly();
       if (k==='Escape') { if(_tool==='polygon') _cancelPoly(); _selIdx=-1; _redraw(); _renderAnnList(); }
@@ -365,13 +397,33 @@
     _cancelPoly();
     _drawing=false; _polyPts=[];
     _tool=t;
+    _hoverIdx=-1;
     document.querySelectorAll('.ann2-tool-btn').forEach(b=>b.classList.remove('active-tool'));
     const btn=document.getElementById(`ann2-tool-${t}`);
     if(btn) btn.classList.add('active-tool');
     const c=document.getElementById('ann2-canvas');
     if(c) c.style.cursor=t==='drag'?'grab':'crosshair';
-    const ph=document.getElementById('ann2-poly-hint');
-    if(ph) ph.style.display='none';
+    
+    const hint = document.getElementById('ann2-hint-text');
+    if (hint) {
+      if (t === 'polygon') {
+        hint.textContent = 'Enter = close selection · Esc = cancel';
+        hint.style.color = 'var(--accent-light)';
+        hint.style.fontSize = '.78rem';
+        hint.style.fontWeight = '600';
+      } else if (t === 'edit') {
+        hint.textContent = 'Click to select · Drag control points to edit';
+        hint.style.color = 'var(--accent-light)';
+        hint.style.fontSize = '.78rem';
+        hint.style.fontWeight = '600';
+      } else {
+        hint.textContent = 'Scroll = zoom · H = pan';
+        hint.style.color = 'var(--text-muted)';
+        hint.style.fontSize = '.7rem';
+        hint.style.fontWeight = 'normal';
+      }
+    }
+    _redraw();
   }
   window.ann2SetTool = _setTool;
 
@@ -388,7 +440,7 @@
 
   // ── Hit ──
   function _hitTest(ix,iy) {
-    for(let i=_anns.length-1;i>=0;i--) {
+    for(let i=0;i<_anns.length;i++) {
       const a=_anns[i]; if(a.locked) continue;
       if(a.type==='bbox'){
         const [[x1,y1],[x2,y2]]=a.points;
@@ -400,10 +452,27 @@
     return -1;
   }
   function _hitCorner(cx,cy,ann) {
-    if(ann.type!=='bbox'||ann.points.length<2) return -1;
-    const [[x1,y1],[x2,y2]]=ann.points;
-    const corners=[_i2c(Math.min(x1,x2),Math.min(y1,y2)),_i2c(Math.max(x1,x2),Math.min(y1,y2)),_i2c(Math.max(x1,x2),Math.max(y1,y2)),_i2c(Math.min(x1,x2),Math.max(y1,y2))];
-    for(let i=0;i<corners.length;i++){const dx=cx-corners[i].x,dy=cy-corners[i].y;if(dx*dx+dy*dy<=64) return i;}
+    if (!ann || ann.locked) return -1;
+    if (ann.type === 'bbox') {
+      if (ann.points.length < 2) return -1;
+      const [[x1,y1],[x2,y2]] = ann.points;
+      const corners = [
+        _i2c(Math.min(x1,x2), Math.min(y1,y2)),
+        _i2c(Math.max(x1,x2), Math.min(y1,y2)),
+        _i2c(Math.max(x1,x2), Math.max(y1,y2)),
+        _i2c(Math.min(x1,x2), Math.max(y1,y2))
+      ];
+      for(let i=0; i<corners.length; i++) {
+        const dx = cx - corners[i].x, dy = cy - corners[i].y;
+        if (dx*dx + dy*dy <= 64) return i;
+      }
+    } else if (ann.type === 'polygon') {
+      for (let i=0; i<ann.points.length; i++) {
+        const c = _i2c(ann.points[i][0], ann.points[i][1]);
+        const dx = cx - c.x, dy = cy - c.y;
+        if (dx*dx + dy*dy <= 64) return i;
+      }
+    }
     return -1;
   }
   function _ptInPoly(px,py,pts) {
@@ -426,11 +495,12 @@
       _panning=true; _panStart={mx:cx,my:cy,px:_pan.x,py:_pan.y};
       e.target.style.cursor='grabbing'; return;
     }
-    if(_tool==='bbox'&&_selIdx>=0&&_anns[_selIdx]) {
-      const ci=_hitCorner(cx,cy,_anns[_selIdx]);
-      if(ci>=0) { _dragCorner=ci; _dragCornerOrig=_anns[_selIdx].points.map(p=>[...p]); return; }
-    }
-    if(_tool!=='polygon') {
+    
+    if(_tool==='edit') {
+      if(_selIdx>=0&&_anns[_selIdx]) {
+        const ci=_hitCorner(cx,cy,_anns[_selIdx]);
+        if(ci>=0) { _dragCorner=ci; _dragCornerOrig=_anns[_selIdx].points.map(p=>[...p]); return; }
+      }
       const hi=_hitTest(ip.x,ip.y);
       if(hi>=0) {
         _selIdx=hi;
@@ -441,9 +511,11 @@
         }
         if(!_anns[hi].locked) { _dragAnn=true; _dragAnnStart={x:ip.x,y:ip.y}; _dragAnnOrig=_anns[hi].points.map(p=>[...p]); }
         _redraw(); _renderAnnList(); return;
+      } else {
+        _selIdx=-1; _redraw(); _renderAnnList(); return;
       }
-      if(_tool==='drag') { _selIdx=-1; _redraw(); _renderAnnList(); return; }
     }
+    
     const cid=parseInt(document.getElementById('ann2-class-sel')?.value);
     if(isNaN(cid)||!_ds?.classes?.names[cid]) { 
       if(window.toast) toast('Pilih class terlebih dahulu', 'err');
@@ -451,7 +523,7 @@
     }
     if(_tool==='bbox') { _drawing=true; _drawStart={x:_clp(ip.x),y:_clp(ip.y)}; return; }
     if(_tool==='polygon') {
-      if(!_drawing) { _drawing=true; _polyPts=[]; const ph=document.getElementById('ann2-poly-hint'); if(ph) ph.style.display=''; }
+      if(!_drawing) { _drawing=true; _polyPts=[]; }
       
       if (_drawing && _polyPts.length >= 3) {
         const firstPt = _i2c(_polyPts[0][0], _polyPts[0][1]);
@@ -470,15 +542,24 @@
     const cx=e.clientX-rect.left, cy=e.clientY-rect.top;
     const ip=_c2i(cx,cy);
     _mouseImg=ip;
+    
+    if (!_panning && _dragCorner === -1 && !_dragAnn && !_drawing) {
+      _hoverIdx = _hitTest(ip.x, ip.y);
+    }
+    
     if(_panning&&_panStart) { _pan.x=_panStart.px+(cx-_panStart.mx); _pan.y=_panStart.py+(cy-_panStart.my); _redraw(); return; }
     if(_dragCorner>=0&&_dragCornerOrig&&_selIdx>=0) {
       const a=_anns[_selIdx]; if(!a||a.locked) return;
       const o=_dragCornerOrig, np=o.map(p=>[...p]);
       const ix=_clp(ip.x),iy=_clp(ip.y);
-      if(_dragCorner===0){np[0]=[ix,iy];}
-      else if(_dragCorner===1){np[0]=[o[0][0],iy];np[1]=[ix,o[1][1]];}
-      else if(_dragCorner===2){np[1]=[ix,iy];}
-      else if(_dragCorner===3){np[0]=[ix,o[0][1]];np[1]=[o[1][0],iy];}
+      if(a.type==='bbox') {
+        if(_dragCorner===0){np[0]=[ix,iy];}
+        else if(_dragCorner===1){np[0]=[o[0][0],iy];np[1]=[ix,o[1][1]];}
+        else if(_dragCorner===2){np[1]=[ix,iy];}
+        else if(_dragCorner===3){np[0]=[ix,o[0][1]];np[1]=[o[1][0],iy];}
+      } else {
+        np[_dragCorner] = [ix,iy];
+      }
       a.points=np; _redraw(); return;
     }
     if(_dragAnn&&_dragAnnStart&&_dragAnnOrig&&_selIdx>=0) {
@@ -487,10 +568,15 @@
       _redraw(); return;
     }
     if(_drawing) _redraw();
-    if(_tool==='bbox'&&_selIdx>=0&&_anns[_selIdx]&&_anns[_selIdx].type==='bbox'&&!_anns[_selIdx].locked) {
+    if(_selIdx>=0&&_anns[_selIdx]&&!_anns[_selIdx].locked) {
       const ci=_hitCorner(cx,cy,_anns[_selIdx]);
-      e.target.style.cursor=ci>=0?['nw-resize','ne-resize','se-resize','sw-resize'][ci]:'crosshair';
+      if(ci>=0) {
+        e.target.style.cursor= _anns[_selIdx].type==='bbox' ? ['nw-resize','ne-resize','se-resize','sw-resize'][ci] : 'move';
+        return;
+      }
     }
+    e.target.style.cursor= _tool==='drag' ? 'grab' : 'crosshair';
+    if(_tool==='edit') _redraw();
   }
 
   function _onUp(e) {
@@ -513,7 +599,7 @@
 
   function _onLeave(e) {
     if(_panning){_panning=false;e.target.style.cursor=_tool==='drag'?'grab':'crosshair';}
-    _mouseImg=null; if(_drawing) _redraw();
+    _mouseImg=null; _hoverIdx=-1; if(_drawing || _tool==='edit') _redraw();
   }
 
   function _onDbl() { if(_tool==='polygon'&&_polyPts.length>=3) _closePoly(); }
@@ -541,7 +627,6 @@
   }
   function _cancelPoly() {
     _drawing=false; _polyPts=[];
-    const ph=document.getElementById('ann2-poly-hint'); if(ph) ph.style.display='none';
     _redraw();
   }
 
@@ -554,38 +639,66 @@
     if(!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     ctx.drawImage(_imgEl,_pan.x,_pan.y,_imgEl.naturalWidth*_scale,_imgEl.naturalHeight*_scale);
 
-    _anns.forEach((ann,idx)=>{
-      const sel=idx===_selIdx;
-      const col=_clsColor(ann.class_id);
+    // Dimming overlay for Edit Mode
+    if (_tool === 'edit') {
       ctx.save();
-      ctx.globalAlpha=ann.locked?0.4:(sel?1:0.78);
-      ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:1.5;
-      if(ann.type==='bbox') {
-        const [[x1,y1],[x2,y2]]=ann.points;
-        const c1=_i2c(Math.min(x1,x2),Math.min(y1,y2)), c2=_i2c(Math.max(x1,x2),Math.max(y1,y2));
-        ctx.strokeRect(c1.x,c1.y,c2.x-c1.x,c2.y-c1.y);
-        ctx.fillStyle=col+'22'; ctx.fillRect(c1.x,c1.y,c2.x-c1.x,c2.y-c1.y);
-        if(sel&&!ann.locked) {
-          [[c1.x,c1.y],[c2.x,c1.y],[c2.x,c2.y],[c1.x,c2.y]].forEach(([px,py])=>{
-            ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2); ctx.fill();
-            ctx.strokeStyle=col; ctx.lineWidth=2; ctx.stroke();
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.beginPath();
+      // Outer rect
+      ctx.rect(0, 0, canvas.width, canvas.height);
+      
+      const hoverAnn = _hoverIdx >= 0 ? _anns[_hoverIdx] : (_selIdx >= 0 ? _anns[_selIdx] : null);
+      if (hoverAnn) {
+        if (hoverAnn.type === 'bbox') {
+          const [[x1,y1],[x2,y2]] = hoverAnn.points;
+          const c1 = _i2c(Math.min(x1,x2), Math.min(y1,y2)), c2 = _i2c(Math.max(x1,x2), Math.max(y1,y2));
+          ctx.rect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+        } else {
+          hoverAnn.points.forEach((p, pi) => {
+            const c = _i2c(p[0], p[1]);
+            if (pi === 0) ctx.moveTo(c.x, c.y);
+            else ctx.lineTo(c.x, c.y);
+          });
+          ctx.closePath();
+        }
+      }
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+
+    for (let idx = _anns.length - 1; idx >= 0; idx--) {
+      const ann = _anns[idx];
+      const sel = idx === _selIdx;
+      const col = _clsColor(ann.class_id);
+      ctx.save();
+      ctx.globalAlpha = ann.locked ? 0.4 : (sel ? 1 : 0.78);
+      ctx.strokeStyle = col; ctx.lineWidth = sel ? 2.5 : 1.5;
+      if (ann.type === 'bbox') {
+        const [[x1, y1], [x2, y2]] = ann.points;
+        const c1 = _i2c(Math.min(x1, x2), Math.min(y1, y2)), c2 = _i2c(Math.max(x1, x2), Math.max(y1, y2));
+        ctx.strokeRect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+        ctx.fillStyle = col + '22'; ctx.fillRect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+        if (sel && !ann.locked) {
+          [[c1.x, c1.y], [c2.x, c1.y], [c2.x, c2.y], [c1.x, c2.y]].forEach(([px, py]) => {
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
           });
         }
       } else {
-        if(ann.points.length>=2) {
+        if (ann.points.length >= 2) {
           ctx.beginPath();
-          ann.points.forEach((p,pi)=>{const c=_i2c(p[0],p[1]); pi===0?ctx.moveTo(c.x,c.y):ctx.lineTo(c.x,c.y);});
+          ann.points.forEach((p, pi) => { const c = _i2c(p[0], p[1]); pi === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y); });
           ctx.closePath(); ctx.stroke();
-          ctx.fillStyle=col+'22'; ctx.fill();
-          if(sel&&!ann.locked) ann.points.forEach(p=>{
-            const c=_i2c(p[0],p[1]);
-            ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(c.x,c.y,4,0,Math.PI*2); ctx.fill();
-            ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.stroke();
+          ctx.fillStyle = col + '22'; ctx.fill();
+          if (sel && !ann.locked) ann.points.forEach(p => {
+            const c = _i2c(p[0], p[1]);
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(c.x, c.y, 5, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
           });
         }
       }
       // Label
-      const lp=ann.type==='bbox'?[Math.min(ann.points[0][0],ann.points[1][0]),Math.min(ann.points[0][1],ann.points[1][1])]:ann.points[0]&&[ann.points[0][0],ann.points[0][1]];
+      const lp = ann.type === 'bbox' ? [Math.min(ann.points[0][0], ann.points[1][0]), Math.min(ann.points[0][1], ann.points[1][1])] : ann.points[0] && [ann.points[0][0], ann.points[0][1]];
       if(lp) {
         const lc=_i2c(lp[0],lp[1]);
         const nm=_ds?.classes?.names[ann.class_id]||`#${ann.class_id}`;
@@ -595,7 +708,7 @@
         ctx.fillStyle='#fff'; ctx.fillText(nm,lc.x+4,lc.y-2);
       }
       ctx.restore();
-    });
+    }
 
     // In-progress bbox
     if(_drawing&&_tool==='bbox'&&_drawStart&&_mouseImg) {
@@ -661,6 +774,46 @@
       const name=_ds?.classes?.names[ann.class_id]||`#${ann.class_id}`;
       const item=document.createElement('div');
       item.className='ann2-ann-item'+(idx===_selIdx?' ann2-selected':'')+(ann.locked?' ann2-locked':'');
+      
+      // HTML5 Drag & Drop for reordering layers
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', idx);
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const draggingItem = list.querySelector('.dragging');
+        if (!draggingItem) return;
+        const siblings = [...list.querySelectorAll('.ann2-ann-item:not(.dragging)')];
+        const nextSibling = siblings.find(sibling => {
+          return e.clientY <= sibling.getBoundingClientRect().top + sibling.getBoundingClientRect().height / 2;
+        });
+        if (nextSibling) {
+          list.insertBefore(draggingItem, nextSibling);
+        } else {
+          list.appendChild(draggingItem);
+        }
+      });
+      item.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+        const draggingItem = list.querySelector('.dragging');
+        if (!draggingItem) return;
+        const currentItems = [...list.querySelectorAll('.ann2-ann-item')];
+        const toIdx = currentItems.indexOf(draggingItem);
+        if (fromIdx !== toIdx && fromIdx >= 0 && toIdx >= 0) {
+          const [moved] = _anns.splice(fromIdx, 1);
+          _anns.splice(toIdx, 0, moved);
+          _selIdx = toIdx;
+          _redraw();
+        }
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        _renderAnnList();
+      });
+
       item.onclick=()=>{
         _selIdx=idx;
         const sel = document.getElementById('ann2-class-sel');
@@ -671,8 +824,11 @@
         _redraw();
         _renderAnnList();
       };
+      
       const dot=document.createElement('span');
-      dot.style.cssText=`width:9px;height:9px;border-radius:2px;background:${col};flex-shrink:0;display:inline-block;`;
+      dot.style.cssText='cursor:grab;margin-right:4px;display:inline-flex;align-items:center;flex-shrink:0;';
+      dot.innerHTML=`<svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:${col};"><path d="M9,5a1.5,1.5,0,1,1-1.5-1.5A1.5,1.5,0,0,1,9,5Zm0,5.5a1.5,1.5,0,1,0,1.5,1.5A1.5,1.5,0,0,0,9,10.5Zm0,5.5a1.5,1.5,0,1,0,1.5,1.5A1.5,1.5,0,0,0,9,16Zm6-11a1.5,1.5,0,1,0-1.5-1.5A1.5,1.5,0,0,0,15,5Zm0,5.5a1.5,1.5,0,1,0,1.5,1.5A1.5,1.5,0,0,0,15,10.5Zm0,5.5a1.5,1.5,0,1,0,1.5,1.5A1.5,1.5,0,0,0,15,16Z"/></svg>`;
+
       const typeEl=document.createElement('span');
       typeEl.style.cssText='color:var(--text-muted);font-size:.68rem;flex-shrink:0;';
       typeEl.textContent=ann.type==='bbox'?'▭':'⬡';
@@ -712,38 +868,46 @@
       chip.appendChild(t); chip.appendChild(btn);
       area.appendChild(chip);
     });
+    if(typeof window._renderTagSelect === 'function') window._renderTagSelect();
   }
 
-  window.ann2FilterTagSuggestions = function(val) {
-    const sug=document.getElementById('ann2-tag-suggestions');
-    if(!sug) return;
-    const f=_tags.filter(t=>t.name.toLowerCase().includes(val.toLowerCase())&&!_curTags.includes(t.name));
-    if(!val||!f.length){sug.style.display='none';return;}
-    sug.style.display=''; sug.innerHTML='';
-    f.forEach(t=>{
-      const it=document.createElement('div'); it.className='ann2-sug-item'; it.textContent=t.name;
-      it.onclick=()=>{if(!_curTags.includes(t.name)){_curTags.push(t.name);_renderTagsArea();}
-        const inp=document.getElementById('ann2-tag-input'); if(inp) inp.value='';
-        sug.style.display='none';};
-      sug.appendChild(it);
+  window._renderTagSelect = function() {
+    const sel=document.getElementById('ann2-tag-sel');
+    if(!sel) return;
+    sel.innerHTML='<option value="">+ Tambah tag...</option>';
+    _tags.forEach(t=>{
+      if(!_curTags.includes(t.name)){
+        const opt=document.createElement('option');
+        opt.value=t.name; opt.textContent=t.name;
+        sel.appendChild(opt);
+      }
     });
   };
 
-  window.ann2TagKeydown = function(e) {
-    if(e.key==='Enter'){
-      const val=e.target.value.trim();
-      const m=_tags.find(t=>t.name.toLowerCase()===val.toLowerCase());
-      if(m&&!_curTags.includes(m.name)){_curTags.push(m.name);_renderTagsArea();}
-      e.target.value='';
-      document.getElementById('ann2-tag-suggestions').style.display='none';
-      e.preventDefault();
+  window.ann2AddSelectedTag = function(sel) {
+    const val=sel.value;
+    if(val&&!_curTags.includes(val)){
+      _curTags.push(val);
+      _renderTagsArea();
     }
-    if(e.key==='Escape') document.getElementById('ann2-tag-suggestions').style.display='none';
+    sel.value='';
   };
 
   // ── Navigation ──
-  window.ann2Prev=()=>{if(_idx>0)_loadImg(_idx-1);};
-  window.ann2Next=()=>{if(_idx<_images.length-1)_loadImg(_idx+1);};
+  window.ann2Prev=()=>{
+    if (_autosave) {
+      ann2Save().then(() => { if(_idx>0)_loadImg(_idx-1); });
+    } else {
+      if(_idx>0)_loadImg(_idx-1);
+    }
+  };
+  window.ann2Next=()=>{
+    if (_autosave) {
+      ann2Save().then(() => { if(_idx<_images.length-1)_loadImg(_idx+1); });
+    } else {
+      if(_idx<_images.length-1)_loadImg(_idx+1);
+    }
+  };
 
   // ── Save ──
   window.ann2Save = async function() {
@@ -768,6 +932,24 @@
       if(window.toast) toast('Gagal: '+e.message,'err');
     }
     if(btn){btn.disabled=false;btn.innerHTML='<svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor;margin-right:4px"><path d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z"/></svg>Save (Ctrl+S)';}
+  };
+
+  window.ann2ToggleAutosave = async function(checked) {
+    _autosave = checked;
+    try {
+      const r = await fetch('/api/llm-settings');
+      if (r.ok) {
+        const s = await r.json();
+        s.autosave = checked;
+        await fetch('/api/llm-settings', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(s)
+        });
+      }
+    } catch(e) {
+      console.error("Failed to save autosave setting", e);
+    }
   };
 
 })();
