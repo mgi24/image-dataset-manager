@@ -217,7 +217,13 @@
     await _fetchImgTags(imgObj.filename);
     _renderTagsArea();
     _imgEl = new Image();
-    _imgEl.onload = () => { _fitImg(); _redraw(); _renderAnnList(); };
+    _imgEl.onload = () => {
+      setTimeout(() => {
+        _fitImg();
+        _redraw();
+        _renderAnnList();
+      }, 50);
+    };
     _imgEl.onerror = () => { _imgEl = null; _redraw(); };
     _imgEl.src = `/dataset/${encodeURIComponent(_ds.name)}/annotate/images/${encodeURIComponent(imgObj.filename)}`;
   }
