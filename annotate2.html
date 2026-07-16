@@ -80,6 +80,10 @@
         <button class="tog-btn ann2-tool-btn" id="ann2-tool-edit" onclick="ann2SetTool('edit')" title="Edit Mode (E) - Edit dan geser anotasi serta titik kontrol" style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
           <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M13.64,21.97C13.14,22.21 12.54,22 12.31,21.5L10.13,16.76L7.62,19.27C7.23,19.66 6.58,19.66 6.19,19.27C6,19.08 5.9,18.83 5.9,18.57V3.5C5.9,2.95 6.35,2.5 6.9,2.5C7.16,2.5 7.41,2.6 7.6,2.79L18.58,13.77C18.97,14.16 18.97,14.81 18.58,15.2C18.39,15.39 18.14,15.49 17.88,15.49H14.88L17.07,20.23C17.3,20.73 17.1,21.33 16.6,21.56L13.64,21.97Z"/></svg>
         </button>
+        <div style="width:28px;height:1px;background:var(--border);margin:2px auto;"></div>
+        <button class="tog-btn ann2-tool-btn" id="ann2-tool-magic" onclick="ann2SetTool('magic')" title="Magic Selection (M) - SAM 3.1 point-to-segment&#10;Click = positive point&#10;Ctrl+Click = negative point&#10;Enter = konfirmasi · Esc = batal" style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer; position:relative;">
+          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z"/></svg>
+        </button>
       </div>
 
 
@@ -103,6 +107,10 @@
 .ann2-tag-chip button:hover { opacity:1; }
 .ann2-sug-item { padding:6px 10px; font-size:.82rem; cursor:pointer; color:var(--text-secondary); transition:background .1s; }
 .ann2-sug-item:hover { background:var(--bg-tertiary); color:var(--text-primary); }
+/* Magic Selection */
+#ann2-tool-magic.active-tool { background: linear-gradient(135deg, #7c3aed, #4f46e5) !important; box-shadow: 0 0 12px rgba(124,58,237,0.6) !important; }
+#ann2-magic-overlay { pointer-events:none; position:absolute; inset:0; z-index:50; }
+.ann2-magic-badge { position:absolute; top:-6px; right:-6px; width:14px; height:14px; border-radius:50%; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:700; color:#fff; border:1.5px solid rgba(0,0,0,0.4); }
 </style>
 
 <script>
@@ -122,6 +130,11 @@
   let _datasetType = 'object_detection'; // default setting
   let _autosave = false;
   let _hoverIdx = -1;
+
+  // Magic Selection state
+  let _magicPts = [];           // [{x, y, label}]  label=1 pos, 0 neg
+  let _magicPreview = null;     // [{x,y}] normalised polygon preview
+  let _magicLoading = false;
 
   // Canvas transform
   let _pan = {x:0, y:0};
@@ -378,11 +391,17 @@
       if ((k==='b'||k==='B') && _datasetType !== 'segment') _setTool('bbox');
       if ((k==='p'||k==='P') && _datasetType !== 'object_detection') _setTool('polygon');
       if (k==='e'||k==='E') _setTool('edit');
+      if (k==='m'||k==='M') _setTool('magic');
       if (k==='ArrowLeft') ann2Prev();
       if (k==='ArrowRight') ann2Next();
       if ((e.ctrlKey||e.metaKey)&&k==='s') { e.preventDefault(); ann2Save(); }
       if (k==='Enter'&&_tool==='polygon'&&_polyPts.length>=3) _closePoly();
-      if (k==='Escape') { if(_tool==='polygon') _cancelPoly(); _selIdx=-1; _redraw(); _renderAnnList(); }
+      if (k==='Enter'&&_tool==='magic'&&_magicPreview&&_magicPreview.length>=3) { e.preventDefault(); _confirmMagic(); }
+      if (k==='Escape') {
+        if(_tool==='polygon') _cancelPoly();
+        if(_tool==='magic') _cancelMagic();
+        _selIdx=-1; _redraw(); _renderAnnList();
+      }
       if ((k==='Delete'||k==='Backspace')&&_selIdx>=0&&!_anns[_selIdx]?.locked) {
         _anns.splice(_selIdx,1); _selIdx=-1; _redraw(); _renderAnnList();
       }
@@ -395,6 +414,7 @@
     if (t === 'polygon' && _datasetType === 'object_detection') return;
     
     _cancelPoly();
+    _cancelMagic();
     _drawing=false; _polyPts=[];
     _tool=t;
     _hoverIdx=-1;
@@ -414,6 +434,11 @@
       } else if (t === 'edit') {
         hint.textContent = 'Click to select · Drag control points to edit';
         hint.style.color = 'var(--accent-light)';
+        hint.style.fontSize = '.78rem';
+        hint.style.fontWeight = '600';
+      } else if (t === 'magic') {
+        hint.textContent = 'Click = positive · Ctrl+Click = negative · Enter = konfirmasi · Esc = batal';
+        hint.style.color = '#a78bfa';
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
       } else {
@@ -494,6 +519,20 @@
     if(_tool==='drag') {
       _panning=true; _panStart={mx:cx,my:cy,px:_pan.x,py:_pan.y};
       e.target.style.cursor='grabbing'; return;
+    }
+
+    if(_tool==='magic') {
+      const cid=parseInt(document.getElementById('ann2-class-sel')?.value);
+      if(isNaN(cid)||!_ds?.classes?.names[cid]) {
+        if(window.toast) toast('Pilih class terlebih dahulu', 'err');
+        return;
+      }
+      if(_magicLoading) return;
+      const label = e.ctrlKey ? 0 : 1;
+      _magicPts.push({x: _clp(ip.x), y: _clp(ip.y), label});
+      _redraw();
+      _runMagicPredict();
+      return;
     }
     
     if(_tool==='edit') {
@@ -630,12 +669,64 @@
     _redraw();
   }
 
+  // ── Magic Selection ──
+  function _cancelMagic() {
+    _magicPts = [];
+    _magicPreview = null;
+    _magicLoading = false;
+    _redraw();
+  }
+
+  function _confirmMagic() {
+    if(!_magicPreview || _magicPreview.length < 3) return;
+    const cid=parseInt(document.getElementById('ann2-class-sel')?.value);
+    if(isNaN(cid)||!_ds?.classes?.names[cid]) {
+      if(window.toast) toast('Pilih class terlebih dahulu', 'err');
+      return;
+    }
+    _anns.push({class_id:cid, points:_magicPreview.map(p=>[p[0],p[1]]), type:'polygon', locked:false});
+    _selIdx=_anns.length-1;
+    _renderAnnList();
+    _magicPts = [];
+    _magicPreview = null;
+    _magicLoading = false;
+    _redraw();
+    if(_autosave) ann2Save();
+  }
+
+  async function _runMagicPredict() {
+    if(!_ds||!_images.length) return;
+    const imgObj = _images[_idx];
+    _magicLoading = true;
+    _redraw();
+    try {
+      const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-predict`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: imgObj.filename, points: _magicPts})
+      });
+      const data = await resp.json();
+      if(resp.ok && data.success && data.polygons && data.polygons.length > 0) {
+        _magicPreview = data.polygons[0]; // array of [x,y]
+      } else {
+        if(window.toast) toast(data.error || 'SAM gagal menghasilkan mask', 'err');
+        _magicPreview = null;
+      }
+    } catch(err) {
+      if(window.toast) toast('SAM error: ' + err.message, 'err');
+      _magicPreview = null;
+    }
+    _magicLoading = false;
+    _redraw();
+  }
+
   // ── Redraw ──
   function _redraw() {
     const canvas=document.getElementById('ann2-canvas');
     if(!canvas) return;
     const ctx=canvas.getContext('2d');
     ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.setLineDash([]);
     if(!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     ctx.drawImage(_imgEl,_pan.x,_pan.y,_imgEl.naturalWidth*_scale,_imgEl.naturalHeight*_scale);
 
@@ -751,7 +842,11 @@
       });
       ctx.restore();
     }
+
+    // Magic Selection overlay (points + preview polygon + spinner)
+    _drawMagicOverlay(ctx);
   }
+
 
   function _clsColor(id) {
     if(_ds?.classes?.color&&_ds.classes.color[id]) return _ds.classes.color[id];
@@ -760,6 +855,66 @@
   function _selColor() {
     const cid=parseInt(document.getElementById('ann2-class-sel')?.value);
     return isNaN(cid)?'#6366f1':_clsColor(cid);
+  }
+
+  // ── Magic Selection Overlay Draw ──
+  function _drawMagicOverlay(ctx) {
+    if(_tool !== 'magic') return;
+
+    // Draw preview polygon
+    if(_magicPreview && _magicPreview.length >= 2) {
+      const col = _selColor();
+      ctx.save();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6,3]);
+      ctx.beginPath();
+      _magicPreview.forEach((p, pi) => {
+        const c = _i2c(p[0], p[1]);
+        pi === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = col + '33';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Loading spinner arc
+    if(_magicLoading) {
+      const cx = document.getElementById('ann2-canvas').width / 2;
+      const cy = document.getElementById('ann2-canvas').height / 2;
+      ctx.save();
+      ctx.strokeStyle = '#a78bfa';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      const t = (Date.now() % 1000) / 1000;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 20, t * Math.PI * 2, t * Math.PI * 2 + Math.PI * 1.2);
+      ctx.stroke();
+      ctx.restore();
+      requestAnimationFrame(_redraw);
+    }
+
+    // Draw placed points
+    _magicPts.forEach(pt => {
+      const c = _i2c(pt.x, pt.y);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = pt.label === 1 ? '#22c55e' : '#ef4444';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // + or - symbol
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(pt.label === 1 ? '+' : '−', c.x, c.y);
+      ctx.restore();
+    });
   }
 
   // ── Ann List ──
