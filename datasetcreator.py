@@ -820,38 +820,25 @@ def move_images_to_annotate(dataset_name: str, payload: MoveImagesRequest):
 
 class SamPredictRequest(BaseModel):
     filename: str
-    class_name: str
     points: list   # [{"x": float, "y": float, "label": int}, ...]  label=1 positive, label=0 negative
 
-# Lazy singleton predictor – loaded once, reused across requests
-_sam_predictor = None
-_sam_predictor_lock = threading.Lock()
+# Lazy singleton model – loaded once, reused across requests
+_sam_model = None
+_sam_model_lock = threading.Lock()
 
-def _get_sam_predictor():
-    global _sam_predictor
-    if _sam_predictor is None:
-        with _sam_predictor_lock:
-            if _sam_predictor is None:
-                model_path = os.path.join(BASE_DIR, "sam3.1.pt")
-                if not os.path.exists(model_path):
-                    raise HTTPException(status_code=503, detail="sam3.1.pt not found")
-                from ultralytics.models.sam import SAM3SemanticPredictor
-                overrides = dict(
-                    conf=0.5,
-                    task="segment",
-                    mode="predict",
-                    model=model_path,
-                    save=False,
-                    device="cuda",
-                    half=False,
-                )
-                _sam_predictor = SAM3SemanticPredictor(overrides=overrides)
-    return _sam_predictor
+def _get_sam_model():
+    global _sam_model
+    if _sam_model is None:
+        with _sam_model_lock:
+            if _sam_model is None:
+                from ultralytics import SAM
+                _sam_model = SAM("sam2_b.pt")
+    return _sam_model
 
 
 @app.post("/api/dataset/{dataset_name}/sam-predict")
 def sam_predict(dataset_name: str, payload: SamPredictRequest):
-    """Run SAM 3.1 point-to-segment on a single image and return normalized polygon points."""
+    """Run SAM point-to-segment on a single image and return normalized polygon points."""
     dataset_path = safe_dataset_path(dataset_name)
 
     # Resolve image path (annotate/images first, then images)
@@ -872,7 +859,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         import cv2
         import numpy as np
 
-        predictor = _get_sam_predictor()
+        model = _get_sam_model()
 
         # Read image to get dimensions
         img = cv2.imread(image_path)
@@ -884,8 +871,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         pt_coords = [[int(p["x"] * w), int(p["y"] * h)] for p in payload.points]
         pt_labels = [int(p["label"]) for p in payload.points]
 
-        predictor.set_image(image_path)
-        results = predictor(text=[payload.class_name], points=[pt_coords], labels=[pt_labels])
+        results = model(image_path, points=pt_coords, labels=pt_labels, device="cuda")
 
         if not results or results[0].masks is None or len(results[0].masks) == 0:
             return {"success": False, "error": "No mask generated", "polygons": []}

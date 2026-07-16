@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np
-from ultralytics.models.sam import SAM3SemanticPredictor
+from ultralytics import SAM
 
 def load_first_image():
     image_dir = r"e:\CODING\vehicledetect\dataset\v1\annotate\images"
@@ -20,16 +20,14 @@ def load_first_image():
 # Global variables for interactive segmentation
 points = []
 labels = []
-predictor = None
+model = None
 image_path = ""
 img_orig = None
 scale = 1.0
-window_name = "SAM 3.1 Point Prompt (Click: Pos, Ctrl+Click: Neg, R: Reset, Esc: Exit)"
-# Define target concepts to guide the SAM 3.1 grounding/concept head
-concepts = ["car", "truck", "license plate", "person"]
+window_name = "SAM Visual Prompting (Click: Pos, Ctrl+Click: Neg, R: Reset, Esc: Exit)"
 
 def run_prediction():
-    global points, labels, img_orig, scale, window_name, predictor
+    global points, labels, img_orig, scale, window_name
     if not points:
         # Show original image resized
         h, w = img_orig.shape[:2]
@@ -40,13 +38,14 @@ def run_prediction():
         return
 
     print(f"Running prediction with {len(points)} points...")
-    
-    # Format coordinates as integers
-    pt_coords = [[int(pt[0]), int(pt[1])] for pt in points]
-    pt_labels = [int(lbl) for lbl in labels]
-    
-    # Run prediction using the semantic predictor with grounding concepts
-    results = predictor(text=concepts, points=[pt_coords], labels=[pt_labels])
+    # Predict using the standard visual prompt API (SAM 2 / SAM 3 visual compatibility)
+    results = model.predict(
+        source=image_path,
+        points=points,
+        labels=labels,
+        device="cuda",
+        verbose=False
+    )
     
     # Plot predictions
     res_img = results[0].plot(labels=False, boxes=False)
@@ -86,7 +85,7 @@ def on_mouse(event, x, y, flags, param):
         run_prediction()
 
 def main():
-    global predictor, image_path, img_orig, scale, points, labels
+    global model, image_path, img_orig, scale, points, labels
     try:
         image_path = load_first_image()
         img_orig = cv2.imread(image_path)
@@ -100,27 +99,14 @@ def main():
         if scale > 1.0:
             scale = 1.0
 
-        model_path = "sam3.1.pt"
+        model_path = "sam3.pt"
         if not os.path.exists(model_path):
-            print(f"Error: {model_path} not found.")
-            return
+            print(f"'{model_path}' not found locally. Falling back to public model 'sam2_b.pt' (will auto-download)...")
+            model_path = "sam2_b.pt"
 
-        print("Loading SAM 3.1 model...")
-        overrides = dict(
-            conf=0.5,
-            task="segment",
-            mode="predict",
-            model=model_path,
-            save=False,
-            device="cuda",
-            half=False,
-        )
-        predictor = SAM3SemanticPredictor(overrides=overrides)
-        print("SAM 3.1 model loaded successfully.")
-
-        # Set image once
-        print("Setting image in predictor...")
-        predictor.set_image(image_path)
+        print(f"Loading {model_path} model...")
+        model = SAM(model_path)
+        print(f"{model_path} model loaded successfully.")
 
         # Create window and set mouse callback
         cv2.namedWindow(window_name)
