@@ -81,3 +81,22 @@ Untuk meningkatkan kecepatan dan keakuratan interaksi pengguna saat menggunakan 
 - Efek visual ini sama seperti di mode Edit (E), memberikan fokus penuh pada area yang sedang diganti.
 
 
+---
+
+## 🤖 5. Alur Kerja Baru Auto Annotate (Checked vs Unchecked Mode)
+
+Checkbox **Auto Annotate** kini bertindak sebagai pengatur mode eksekusi ketika berada di alat Auto Annotate:
+
+### 1. Mode Loop Otomatis (Checkbox Dicentang / Aktif)
+- **Shortcut `S`**: Melakukan deteksi (scan), otomatis menyimpan hasil anotasi (`Save`), menerapkan auto-tags, memuat gambar berikutnya (`Next Image`), dan secara rekursif memproses gambar baru tersebut secara otomatis.
+- Cocok digunakan untuk dataset berskala besar yang memiliki konfigurasi prompt yang sudah sangat akurat.
+
+### 2. Mode Scan Preview (Checkbox Tidak Dicentang / Nonaktif)
+- Pengguna tetap berada pada alat Auto Annotate, namun sistem tidak langsung menyimpan hasil deteksi.
+- **Shortcut `S`**: Melakukan pemindaian (scan) dan menampilkan **polygon sementara (preview)** berupa garis putus-putus.
+- **Shortcut `Enter`**: Mengonfirmasi dan menyimpan semua polygon sementara yang tampil ke daftar anotasi permanen (menggantikan shortcut `A` sebelumnya).
+- **Shortcut `Esc`**: Membatalkan pemindaian dan menghapus semua preview polygon sementara pada kanvas.
+- Cocok digunakan untuk memverifikasi atau menyeleksi hasil SAM sebelum disimpan secara permanen.
+
+
+

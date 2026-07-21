@@ -26,6 +26,7 @@
   let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [] };
   let _autoProcessing = false;
   let _autoApprovedTags = [];  // local editable copy for panel
+  let _tempAutoAnns = [];      // temporary scan-only polygons for preview
   let _settingsDirty = false;
   let _settingsSnapshot = null;  // deep clone at time of open, for cancel-revert
 
@@ -214,6 +215,7 @@
   // ── Image Loading ──
   async function _loadImg(idx) {
     _idx = Math.max(0, Math.min(idx, _images.length - 1));
+    _tempAutoAnns = [];
     const imgObj = _images[_idx];
     _anns = (imgObj.annotations || []).map(a => ({
       class_id: a.class_id,
@@ -306,15 +308,16 @@
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); ann2Save(); }
       if (k === 'Enter' && _tool === 'polygon' && _polyPts.length >= 3) _closePoly();
       if (k === 'Enter' && _tool === 'magic' && _magicPreview && _magicPreview.length >= 3) { e.preventDefault(); _confirmMagic(); }
+      if (k === 'Enter' && _tool === 'autoann' && _tempAutoAnns.length > 0) { e.preventDefault(); _confirmTempAutoAnns(); }
       if (k === 'Escape') {
         if (_tool === 'polygon') _cancelPoly();
         if (_tool === 'magic') _cancelMagic();
+        if (_tool === 'autoann' && _tempAutoAnns.length > 0) { _clearTempAutoAnns(); }
         _selIdx = -1; _redraw(); _renderAnnList();
       }
       // Auto Annotate shortcuts
-      if (_autoAnnotateActive && !_autoProcessing) {
+      if (_tool === 'autoann' && !_autoProcessing) {
         if (k === 's' || k === 'S') { e.preventDefault(); ann2StartAutoAnnotate(); }
-        if (k === 'a' || k === 'A') { e.preventDefault(); ann2ApproveAutoAnnotate(); return; }
       }
       if ((k === 'Delete' || k === 'Backspace') && _selIdx >= 0 && !_anns[_selIdx]?.locked) {
         _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList();
@@ -352,13 +355,13 @@
     if (c) c.style.cursor = t === 'drag' ? 'grab' : 'crosshair';
 
     if (t === 'autoann') {
-      _autoAnnotateActive = true;
       const chk = document.getElementById('ann2-auto-annotate-chk');
-      if (chk) chk.checked = true;
-      const hints = document.getElementById('ann2-auto-hints');
-      if (hints) hints.style.display = 'flex';
+      if (chk) {
+        _autoAnnotateActive = chk.checked;
+      }
       ann2OpenAutoSettingsModal();
     }
+    if (typeof _updateAutoHints === 'function') _updateAutoHints();
 
     const hint = document.getElementById('ann2-hint-text');
     if (hint) {
@@ -378,7 +381,11 @@
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
       } else if (t === 'autoann') {
-        hint.textContent = 'S = Process · A = Approve & Next';
+        if (_autoAnnotateActive) {
+          hint.textContent = 'S = Process (Loop & Next)';
+        } else {
+          hint.textContent = 'S = Scan · Enter = Confirm · Esc = Cancel';
+        }
         hint.style.color = '#c4b5fd';
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
@@ -851,6 +858,27 @@
       ctx.restore();
     }
 
+    // Draw temporary auto-annotate preview polygons (Unchecked mode)
+    if (_tempAutoAnns && _tempAutoAnns.length > 0) {
+      _tempAutoAnns.forEach(ann => {
+        const col = _clsColor(ann.class_id);
+        ctx.save();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]); // dashed line for preview status
+        ctx.beginPath();
+        ann.points.forEach((p, pi) => {
+          const c = _i2c(p[0], p[1]);
+          pi === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = col + '1a'; // very light fill
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
     // Magic Selection overlay (points + preview polygon + spinner)
     _drawMagicOverlay(ctx);
   }
@@ -1219,16 +1247,46 @@
   // Toggle auto annotate mode
   window.ann2ToggleAutoAnnotate = function (checked) {
     _autoAnnotateActive = checked;
-    const hints = document.getElementById('ann2-auto-hints');
-    if (hints) hints.style.display = checked ? 'flex' : 'none';
     if (checked) {
-      _setTool('autoann');
+      if (_tool !== 'autoann') {
+        _setTool('autoann');
+      } else {
+        _updateAutoHints();
+        const hint = document.getElementById('ann2-hint-text');
+        if (hint) {
+          hint.textContent = 'S = Process (Loop & Next)';
+        }
+      }
       ann2OpenAutoSettingsModal();
     } else {
-      if (_tool === 'autoann') _setTool('drag');
-      ann2CloseAutoSettingsModal();
+      _updateAutoHints();
+      const hint = document.getElementById('ann2-hint-text');
+      if (hint && _tool === 'autoann') {
+        hint.textContent = 'S = Scan · Enter = Confirm · Esc = Cancel';
+      }
     }
   };
+
+  function _updateAutoHints() {
+    const hints = document.getElementById('ann2-auto-hints');
+    if (!hints) return;
+    if (_tool === 'autoann') {
+      hints.style.display = 'flex';
+      if (_autoAnnotateActive) {
+        hints.innerHTML = `
+          <div class="ann2-shortcut-badge"><kbd>S</kbd> Process &amp; Next (Loop)</div>
+        `;
+      } else {
+        hints.innerHTML = `
+          <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan Image</div>
+          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm Scan</div>
+          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel Scan</div>
+        `;
+      }
+    } else {
+      hints.style.display = 'none';
+    }
+  }
 
   async function _loadAutoSettings() {
     if (!_ds) return;
@@ -1504,33 +1562,47 @@
       });
       const data = await resp.json();
       if (resp.ok && data.success && data.annotations) {
-        let added = 0;
-        data.annotations.forEach(newAnn => {
-          // Client-side dedup against existing _anns
-          let isDup = false;
-          for (const existing of _anns) {
-            if (existing.type === 'polygon' || existing.type === 'bbox') {
-              const existPoly = existing.type === 'bbox'
-                ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
-                : existing.points;
-              const iou = _polygonIoU(newAnn.points, existPoly);
-              if (iou > 0.85) { isDup = true; break; }
+        if (_autoAnnotateActive) {
+          // Checked mode: add permanently and auto-loop approve & next
+          let added = 0;
+          data.annotations.forEach(newAnn => {
+            let isDup = false;
+            for (const existing of _anns) {
+              if (existing.type === 'polygon' || existing.type === 'bbox') {
+                const existPoly = existing.type === 'bbox'
+                  ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+                  : existing.points;
+                const iou = _polygonIoU(newAnn.points, existPoly);
+                if (iou > 0.85) { isDup = true; break; }
+              }
             }
-          }
-          if (!isDup) {
-            _anns.push({
-              class_id: newAnn.class_id,
-              points: newAnn.points.map(p => [...p]),
-              type: 'polygon',
-              locked: false
-            });
-            added++;
-          }
-        });
-        if (window.toast) toast(`Auto annotate: ${added} segments added`);
-        _selIdx = _anns.length - 1;
-        _renderAnnList();
-        _redraw();
+            if (!isDup) {
+              _anns.push({
+                class_id: newAnn.class_id,
+                points: newAnn.points.map(p => [...p]),
+                type: 'polygon',
+                locked: false
+              });
+              added++;
+            }
+          });
+          if (window.toast) toast(`Auto annotate: ${added} segments added`);
+          _selIdx = _anns.length - 1;
+          _renderAnnList();
+          _redraw();
+
+          // Auto-save and loop to next image
+          await ann2ApproveAutoAnnotate();
+        } else {
+          // Unchecked mode: store as temporary preview polygons
+          _tempAutoAnns = data.annotations.map(newAnn => ({
+            class_id: newAnn.class_id,
+            points: newAnn.points.map(p => [...p]),
+            type: 'polygon'
+          }));
+          if (window.toast) toast(`Scanned: ${_tempAutoAnns.length} objects. Press Enter to confirm, Esc to cancel`);
+          _redraw();
+        }
       } else {
         if (window.toast) toast(data.error || 'Auto annotate failed', 'err');
       }
@@ -1542,9 +1614,9 @@
     _showProcessing(false);
   };
 
-  // Approve auto annotate (A key)
+  // Approve auto annotate (S key checked-mode auto-loop, or Enter manually)
   window.ann2ApproveAutoAnnotate = async function () {
-    if (!_ds || !_images.length || _autoProcessing) return;
+    if (!_ds || !_images.length) return;
 
     // Add tags if configured
     if (_autoAnnotateSettings.on_approved_tags && _autoAnnotateSettings.on_approved_tags.length > 0) {
@@ -1571,20 +1643,55 @@
     if (_idx < _images.length - 1) {
       _loadImg(_idx + 1);
 
-      // If auto checkbox is on, auto-process next image
+      // If auto loop is still active, trigger prediction automatically
       if (_autoAnnotateActive) {
-        // Small delay to let image load
         setTimeout(async () => {
           await ann2StartAutoAnnotate();
-          // Auto approve recursively if still active
-          if (_autoAnnotateActive && _idx < _images.length - 1) {
-            await ann2ApproveAutoAnnotate();
-          }
         }, 500);
       }
     } else {
       if (window.toast) toast('Semua gambar sudah di-annotate ✓');
     }
   };
+
+  // Helper functions for preview confirm & cancel
+  function _confirmTempAutoAnns() {
+    if (!_tempAutoAnns || _tempAutoAnns.length === 0) return;
+    let added = 0;
+    _tempAutoAnns.forEach(newAnn => {
+      let isDup = false;
+      for (const existing of _anns) {
+        if (existing.type === 'polygon' || existing.type === 'bbox') {
+          const existPoly = existing.type === 'bbox'
+            ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+            : existing.points;
+          const iou = _polygonIoU(newAnn.points, existPoly);
+          if (iou > 0.85) { isDup = true; break; }
+        }
+      }
+      if (!isDup) {
+        _anns.push({
+          class_id: newAnn.class_id,
+          points: newAnn.points.map(p => [...p]),
+          type: 'polygon',
+          locked: false
+        });
+        added++;
+      }
+    });
+    if (window.toast) toast(`Confirmed: ${added} segments saved`);
+    _tempAutoAnns = [];
+    _selIdx = _anns.length - 1;
+    _renderAnnList();
+    _redraw();
+    if (_autosave) ann2Save();
+  }
+
+  function _clearTempAutoAnns() {
+    if (!_tempAutoAnns || _tempAutoAnns.length === 0) return;
+    _tempAutoAnns = [];
+    _redraw();
+    if (window.toast) toast('Scan cancelled');
+  }
 
 })();

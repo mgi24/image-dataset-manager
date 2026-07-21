@@ -41,10 +41,11 @@ def run_prediction():
 
     print(f"Running prediction with {len(points)} points...")
     # Predict using the standard visual prompt API (SAM 2 / SAM 3 visual compatibility)
+    # Wrap points in an extra list [points] and labels in [labels] so they apply to the same object
     results = model.predict(
         source=image_path,
-        points=points,
-        labels=labels,
+        points=[points],
+        labels=[labels],
         device="cuda",
         verbose=True
     )

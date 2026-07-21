@@ -895,8 +895,8 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 
         results = model(
             image_path, 
-            points=pt_coords, 
-            labels=pt_labels, 
+            points=[pt_coords], 
+            labels=[pt_labels], 
             device="cuda", 
             imgsz=max(h, w)
         )
