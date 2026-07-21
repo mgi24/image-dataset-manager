@@ -65,3 +65,19 @@ Untuk meningkatkan kenyamanan alur kerja anotasi, panel pengaturan Auto Annotate
   - Tombol **Batalkan Perubahan** akan membatalkan seluruh perubahan yang belum disimpan dan mengembalikan konfigurasi panel ke snapshot konfigurasi server terakhir.
   - Setelah berhasil melakukan penyimpanan, status panel kembali bersih (`clean`) dan tombol simpan dinonaktifkan kembali.
 
+---
+
+## 🖐️ 4. Aksesibilitas Navigasi & Magic Selection (Replace Mode Enhancement)
+
+Untuk meningkatkan kecepatan dan keakuratan interaksi pengguna saat menggunakan editor:
+
+### 1. Middle-Click Drag Canvas (Pan) pada Semua Mode
+- Sekarang pengguna dapat melakukan **klik tengah mouse (Middle Mouse Button)** lalu menggeser mouse (drag) untuk menggeser canvas (pan/drag canvas) di **seluruh mode** anotasi (BBox, Polygon, Edit, Magic, dll).
+- Hal ini menghilangkan keharusan berpindah ke mode Hand/Drag (shortcut `H`) terlebih dahulu hanya untuk menggeser gambar, sehingga proses pelabelan menjadi jauh lebih cepat.
+
+### 2. Efek Gelap 50% (Dimming Overlay) saat Shift+Hover di Mode Magic (M)
+- Pada mode Magic Selection (M), ketika pengguna menahan tombol **Shift** untuk memilih anotasi yang ingin diganti (Replace Mode), canvas akan meredup **50% (gelap)**.
+- Hanya anotasi yang sedang diarahkan oleh kursor (hover) atau sedang dijadikan target penggantian yang tetap terang benderang.
+- Efek visual ini sama seperti di mode Edit (E), memberikan fokus penuh pada area yang sedang diganti.
+
+

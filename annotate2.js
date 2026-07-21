@@ -19,6 +19,7 @@
   let _magicPts = [];           // [{x, y, label}]  label=1 pos, 0 neg
   let _magicPreview = null;     // [{x,y}] normalised polygon preview
   let _magicLoading = false;
+  let _magicReplaceIdx = -1;    // index of _anns to replace on confirm (-1 = add new)
 
   // Auto Annotate state
   let _autoAnnotateActive = false;
@@ -35,6 +36,7 @@
   // Interaction state
   let _panning = false, _panStart = null;
   let _drawing = false, _drawStart = null;
+  let _shiftHeld = false;
   let _polyPts = [];
   let _mouseImg = null;
   let _polySnap = false;
@@ -267,6 +269,7 @@
     c.addEventListener('wheel', _onWheel, { passive: false });
     c.addEventListener('dblclick', _onDbl);
     c.addEventListener('contextmenu', e => { e.preventDefault(); if (_tool === 'polygon') _cancelPoly(); });
+    c.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
     document.addEventListener('click', e => {
       const menu = document.getElementById('ann2-premium-sel-menu');
       const trigger = document.getElementById('ann2-premium-sel-trigger');
@@ -284,6 +287,14 @@
       if (!root || root.closest('[style*="display:none"]')) return;
       const tag = e.target.tagName.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (e.key === 'Shift') {
+        if (!_shiftHeld) {
+          _shiftHeld = true;
+          _redraw();
+        }
+      }
+
       const k = e.key;
       if (k === 'h' || k === 'H') _setTool('drag');
       if ((k === 'b' || k === 'B') && _datasetType !== 'segment') _setTool('bbox');
@@ -307,6 +318,19 @@
       }
       if ((k === 'Delete' || k === 'Backspace') && _selIdx >= 0 && !_anns[_selIdx]?.locked) {
         _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList();
+      }
+    });
+
+    document.addEventListener('keyup', e => {
+      if (e.key === 'Shift') {
+        if (_shiftHeld) {
+          _shiftHeld = false;
+          const canvas = document.getElementById('ann2-canvas');
+          if (canvas) {
+            canvas.style.cursor = _tool === 'drag' ? 'grab' : 'crosshair';
+          }
+          _redraw();
+        }
       }
     });
   }
@@ -349,7 +373,7 @@
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
       } else if (t === 'magic') {
-        hint.textContent = 'Click = positive · Ctrl+Click = negative · Enter = konfirmasi · Esc = batal';
+        hint.textContent = 'Click = positive · Ctrl+Click = negative · Shift+Click = select to replace · Enter = konfirmasi · Esc = batal';
         hint.style.color = '#a78bfa';
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
@@ -428,10 +452,16 @@
 
   // ── Mouse Handlers ──
   function _onDown(e) {
-    if (e.button !== 0) return;
     const rect = e.target.getBoundingClientRect();
     const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
     const ip = _c2i(cx, cy);
+
+    if (e.button === 1) { // Middle click drag pan in any tool
+      e.preventDefault();
+      _panning = true; _panStart = { mx: cx, my: cy, px: _pan.x, py: _pan.y };
+      e.target.style.cursor = 'grabbing'; return;
+    }
+    if (e.button !== 0) return;
 
     if (_tool === 'drag') {
       _panning = true; _panStart = { mx: cx, my: cy, px: _pan.x, py: _pan.y };
@@ -439,6 +469,42 @@
     }
 
     if (_tool === 'magic') {
+      // Shift+Click: enter replace-select mode — pick an existing annotation to replace
+      if (e.shiftKey) {
+        const hi = _hitTest(ip.x, ip.y);
+        if (hi >= 0) {
+          // Select the target annotation for replacement
+          _magicReplaceIdx = hi;
+          _selIdx = hi;
+          // Sync class dropdown to the selected annotation's class
+          const annCid = _anns[hi].class_id;
+          const sel = document.getElementById('ann2-class-sel');
+          if (sel) {
+            sel.value = annCid;
+            _updateClassDotColor();
+          }
+          // Clear any existing magic points to start fresh for replacement
+          _magicPts = [];
+          _magicPreview = null;
+          _magicLoading = false;
+          _redraw();
+          _renderAnnList();
+          // Update hint text to show we're in replace mode
+          const hint = document.getElementById('ann2-hint-text');
+          if (hint) {
+            hint.textContent = '🔁 Replace mode — Click = positive · Ctrl+Click = negative · Enter = replace · Esc = cancel';
+            hint.style.color = '#fb923c';
+          }
+        } else {
+          // Shift+Click on empty area: cancel replace mode
+          _magicReplaceIdx = -1;
+          _selIdx = -1;
+          _redraw();
+          _renderAnnList();
+        }
+        return;
+      }
+
       const cid = parseInt(document.getElementById('ann2-class-sel')?.value);
       if (isNaN(cid) || !_ds?.classes?.names[cid]) {
         if (window.toast) toast('Pilih class terlebih dahulu', 'err');
@@ -503,6 +569,14 @@
       _hoverIdx = _hitTest(ip.x, ip.y);
     }
 
+    // In magic mode + Shift held: show hover highlight for replace-select
+    if (_tool === 'magic' && (e.shiftKey || _shiftHeld) && _magicPts.length === 0 && !_magicLoading) {
+      _hoverIdx = _hitTest(ip.x, ip.y);
+      e.target.style.cursor = _hoverIdx >= 0 ? 'pointer' : 'crosshair';
+      _redraw();
+      return;
+    }
+
     if (_panning && _panStart) { _pan.x = _panStart.px + (cx - _panStart.mx); _pan.y = _panStart.py + (cy - _panStart.my); _redraw(); return; }
     if (_dragCorner >= 0 && _dragCornerOrig && _selIdx >= 0) {
       const a = _anns[_selIdx]; if (!a || a.locked) return;
@@ -555,7 +629,7 @@
 
   function _onLeave(e) {
     if (_panning) { _panning = false; e.target.style.cursor = _tool === 'drag' ? 'grab' : 'crosshair'; }
-    _mouseImg = null; _hoverIdx = -1; if (_drawing || _tool === 'edit') _redraw();
+    _mouseImg = null; _hoverIdx = -1; if (_drawing || _tool === 'edit' || _tool === 'magic') _redraw();
   }
 
   function _onDbl() { if (_tool === 'polygon' && _polyPts.length >= 3) _closePoly(); }
@@ -591,6 +665,7 @@
     _magicPts = [];
     _magicPreview = null;
     _magicLoading = false;
+    _magicReplaceIdx = -1;
     _redraw();
   }
 
@@ -601,14 +676,30 @@
       if (window.toast) toast('Pilih class terlebih dahulu', 'err');
       return;
     }
-    _anns.push({ class_id: cid, points: _magicPreview.map(p => [p[0], p[1]]), type: 'polygon', locked: false });
-    _selIdx = _anns.length - 1;
+    const newAnn = { class_id: cid, points: _magicPreview.map(p => [p[0], p[1]]), type: 'polygon', locked: false };
+    if (_magicReplaceIdx >= 0 && _magicReplaceIdx < _anns.length) {
+      // Replace existing annotation
+      _anns[_magicReplaceIdx] = newAnn;
+      _selIdx = _magicReplaceIdx;
+      if (window.toast) toast(`Anotasi #${_magicReplaceIdx + 1} diganti ✓`);
+    } else {
+      // Add new annotation
+      _anns.push(newAnn);
+      _selIdx = _anns.length - 1;
+    }
+    _magicReplaceIdx = -1;
     _renderAnnList();
     _magicPts = [];
     _magicPreview = null;
     _magicLoading = false;
     _redraw();
     if (_autosave) ann2Save();
+    // Restore magic mode hint text
+    const hint = document.getElementById('ann2-hint-text');
+    if (hint) {
+      hint.textContent = 'Click = positive · Ctrl+Click = negative · Shift+Click = select to replace · Enter = konfirmasi · Esc = batal';
+      hint.style.color = '#a78bfa';
+    }
   }
 
   async function _runMagicPredict() {
@@ -647,8 +738,8 @@
     if (!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     ctx.drawImage(_imgEl, _pan.x, _pan.y, _imgEl.naturalWidth * _scale, _imgEl.naturalHeight * _scale);
 
-    // Dimming overlay for Edit Mode
-    if (_tool === 'edit') {
+    // Dimming overlay for Edit Mode or Magic Selection with Shift / Replace active
+    if (_tool === 'edit' || (_tool === 'magic' && (_shiftHeld || _magicReplaceIdx >= 0))) {
       ctx.save();
       ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       ctx.beginPath();
@@ -776,6 +867,46 @@
   // ── Magic Selection Overlay Draw ──
   function _drawMagicOverlay(ctx) {
     if (_tool !== 'magic') return;
+
+    // Draw replace-target annotation highlight (amber dashed border)
+    if (_magicReplaceIdx >= 0 && _magicReplaceIdx < _anns.length) {
+      const target = _anns[_magicReplaceIdx];
+      ctx.save();
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([8, 4]);
+      ctx.shadowColor = '#fb923c';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      if (target.type === 'bbox') {
+        const [[x1, y1], [x2, y2]] = target.points;
+        const c1 = _i2c(Math.min(x1,x2), Math.min(y1,y2));
+        const c2 = _i2c(Math.max(x1,x2), Math.max(y1,y2));
+        ctx.rect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+      } else {
+        target.points.forEach((p, pi) => {
+          const c = _i2c(p[0], p[1]);
+          pi === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y);
+        });
+        ctx.closePath();
+      }
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(251,146,60,0.15)';
+      ctx.fill();
+      ctx.restore();
+
+      // Label: "→ replacing #N"
+      if (target.points.length > 0) {
+        const firstPt = target.type === 'bbox' ? _i2c(target.points[0][0], target.points[0][1]) : _i2c(target.points[0][0], target.points[0][1]);
+        ctx.save();
+        ctx.font = 'bold 11px Outfit, sans-serif';
+        ctx.fillStyle = '#fb923c';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`→ replace #${_magicReplaceIdx + 1}`, firstPt.x + 6, firstPt.y - 4);
+        ctx.restore();
+      }
+    }
 
     // Draw preview polygon
     if (_magicPreview && _magicPreview.length >= 2) {
