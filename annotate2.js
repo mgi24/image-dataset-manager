@@ -20,6 +20,12 @@
   let _magicPreview = null;     // [{x,y}] normalised polygon preview
   let _magicLoading = false;
 
+  // Auto Annotate state
+  let _autoAnnotateActive = false;
+  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [] };
+  let _autoProcessing = false;
+  let _autoApprovedTags = [];  // local editable copy for panel
+
   // Canvas transform
   let _pan = { x: 0, y: 0 };
   let _scale = 1;
@@ -292,6 +298,11 @@
         if (_tool === 'magic') _cancelMagic();
         _selIdx = -1; _redraw(); _renderAnnList();
       }
+      // Auto Annotate shortcuts
+      if (_autoAnnotateActive && !_autoProcessing) {
+        if (k === 's' || k === 'S') { e.preventDefault(); ann2StartAutoAnnotate(); }
+        if (k === 'a' || k === 'A') { e.preventDefault(); ann2ApproveAutoAnnotate(); return; }
+      }
       if ((k === 'Delete' || k === 'Backspace') && _selIdx >= 0 && !_anns[_selIdx]?.locked) {
         _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList();
       }
@@ -314,6 +325,15 @@
     const c = document.getElementById('ann2-canvas');
     if (c) c.style.cursor = t === 'drag' ? 'grab' : 'crosshair';
 
+    if (t === 'autoann') {
+      _autoAnnotateActive = true;
+      const chk = document.getElementById('ann2-auto-annotate-chk');
+      if (chk) chk.checked = true;
+      const hints = document.getElementById('ann2-auto-hints');
+      if (hints) hints.style.display = 'flex';
+      ann2OpenAutoSettingsModal();
+    }
+
     const hint = document.getElementById('ann2-hint-text');
     if (hint) {
       if (t === 'polygon') {
@@ -329,6 +349,11 @@
       } else if (t === 'magic') {
         hint.textContent = 'Click = positive · Ctrl+Click = negative · Enter = konfirmasi · Esc = batal';
         hint.style.color = '#a78bfa';
+        hint.style.fontSize = '.78rem';
+        hint.style.fontWeight = '600';
+      } else if (t === 'autoann') {
+        hint.textContent = 'S = Process · A = Approve & Next';
+        hint.style.color = '#c4b5fd';
         hint.style.fontSize = '.78rem';
         hint.style.fontWeight = '600';
       } else {
@@ -993,6 +1018,373 @@
       }
     } catch (e) {
       console.error("Failed to save autosave setting", e);
+    }
+  };
+
+  // ── Auto Annotate ──
+
+  // Modal controls
+  window.ann2OpenAutoSettingsModal = function () {
+    const modal = document.getElementById('ann2-auto-settings-modal');
+    if (modal) modal.style.display = 'flex';
+    _loadAutoSettings();
+  };
+
+  window.ann2CloseAutoSettingsModal = function () {
+    const modal = document.getElementById('ann2-auto-settings-modal');
+    if (modal) modal.style.display = 'none';
+  };
+
+  // Toggle auto annotate mode
+  window.ann2ToggleAutoAnnotate = function (checked) {
+    _autoAnnotateActive = checked;
+    const hints = document.getElementById('ann2-auto-hints');
+    if (hints) hints.style.display = checked ? 'flex' : 'none';
+    if (checked) {
+      _setTool('autoann');
+      ann2OpenAutoSettingsModal();
+    } else {
+      if (_tool === 'autoann') _setTool('drag');
+      ann2CloseAutoSettingsModal();
+    }
+  };
+
+  async function _loadAutoSettings() {
+    if (!_ds) return;
+    try {
+      const r = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`);
+      if (r.ok) {
+        const s = await r.json();
+        _autoAnnotateSettings = s;
+        _autoApprovedTags = [...(s.on_approved_tags || [])];
+      }
+    } catch (e) { console.error('Failed to load auto-annotate settings', e); }
+    _renderAutoSettingsPanel();
+  }
+
+  function _renderAutoSettingsPanel() {
+    // Model
+    const modelSel = document.getElementById('ann2-auto-model');
+    if (modelSel) modelSel.value = _autoAnnotateSettings.model || 'sam3.1';
+
+    // Prompts
+    const container = document.getElementById('ann2-auto-prompts');
+    if (container) {
+      container.innerHTML = '';
+      const prompts = _autoAnnotateSettings.prompts || [];
+      prompts.forEach((p, idx) => _addPromptRowDOM(container, p.prompt, p.class_id, idx));
+      if (prompts.length === 0) _addPromptRowDOM(container, '', 0, 0);
+    }
+
+    // Tags
+    _renderAutoTagsArea();
+  }
+
+  function _populateClassOptions(clsSel, selectedClassId) {
+    clsSel.innerHTML = '';
+    const names = _ds?.classes?.names || [];
+    names.forEach((n, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}: ${n}`;
+      if (i === selectedClassId) opt.selected = true;
+      clsSel.appendChild(opt);
+    });
+
+    const addOpt = document.createElement('option');
+    addOpt.value = '__add_new__';
+    addOpt.textContent = '+ Tambah Class Baru...';
+    addOpt.style.fontWeight = 'bold';
+    addOpt.style.color = '#a855f7';
+    clsSel.appendChild(addOpt);
+  }
+
+  async function _addNewClassPrompt(clsSel) {
+    const name = prompt('Masukkan nama class baru:');
+    if (!name || !name.trim()) {
+      clsSel.value = 0;
+      return;
+    }
+    const newClassName = name.trim();
+    if (!_ds.classes) _ds.classes = { names: [] };
+    if (!_ds.classes.names) _ds.classes.names = [];
+
+    const newId = _ds.classes.names.length;
+    _ds.classes.names.push(newClassName);
+
+    try {
+      await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/class-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: _ds.classes.names })
+      });
+    } catch (e) {
+      console.warn('Could not persist class setting to server:', e);
+    }
+
+    _buildClassSel();
+
+    document.querySelectorAll('#ann2-auto-prompts select').forEach(s => {
+      const curVal = s === clsSel ? newId : parseInt(s.value);
+      _populateClassOptions(s, curVal);
+    });
+
+    if (window.toast) toast(`Class '${newClassName}' ditambahkan ✓`);
+  }
+
+  function _addPromptRowDOM(container, promptText, classId, idx) {
+    const row = document.createElement('div');
+    row.className = 'ann2-prompt-row';
+    row.dataset.idx = idx;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = promptText || '';
+    input.placeholder = 'e.g. car, license plate...';
+
+    const clsSel = document.createElement('select');
+    _populateClassOptions(clsSel, classId);
+
+    clsSel.onchange = function () {
+      if (this.value === '__add_new__') {
+        _addNewClassPrompt(clsSel);
+      }
+    };
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'ann2-prompt-del';
+    delBtn.textContent = '×';
+    delBtn.title = 'Remove';
+    delBtn.onclick = () => { row.remove(); };
+
+    row.append(input, clsSel, delBtn);
+    container.appendChild(row);
+  }
+
+  window.ann2AddPromptRow = function () {
+    const container = document.getElementById('ann2-auto-prompts');
+    if (!container) return;
+    const idx = container.children.length;
+    _addPromptRowDOM(container, '', 0, idx);
+  };
+
+  function _renderAutoTagsArea() {
+    const area = document.getElementById('ann2-auto-tags-area');
+    if (!area) return;
+    area.innerHTML = '';
+    _autoApprovedTags.forEach(tag => {
+      const chip = document.createElement('span');
+      chip.className = 'ann2-auto-tag-chip';
+      chip.textContent = tag;
+      const btn = document.createElement('button');
+      btn.textContent = '×';
+      btn.onclick = () => {
+        _autoApprovedTags = _autoApprovedTags.filter(t => t !== tag);
+        _renderAutoTagsArea();
+      };
+      chip.appendChild(btn);
+      area.appendChild(chip);
+    });
+
+    // Populate tag select
+    const sel = document.getElementById('ann2-auto-tag-sel');
+    if (sel) {
+      sel.innerHTML = '<option value="">+ Tambah tag...</option>';
+      _tags.forEach(t => {
+        if (!_autoApprovedTags.includes(t.name)) {
+          const opt = document.createElement('option');
+          opt.value = t.name; opt.textContent = t.name;
+          sel.appendChild(opt);
+        }
+      });
+    }
+  }
+
+  window.ann2AddAutoTag = function (sel) {
+    const val = sel.value;
+    if (val && !_autoApprovedTags.includes(val)) {
+      _autoApprovedTags.push(val);
+      _renderAutoTagsArea();
+    }
+    sel.value = '';
+  };
+
+  window.ann2SaveAutoSettings = async function () {
+    if (!_ds) return;
+    // Collect prompts from DOM
+    const rows = document.querySelectorAll('#ann2-auto-prompts .ann2-prompt-row');
+    const prompts = [];
+    rows.forEach(row => {
+      const input = row.querySelector('input');
+      const sel = row.querySelector('select');
+      const prompt = input?.value?.trim();
+      const class_id = parseInt(sel?.value) || 0;
+      if (prompt) prompts.push({ prompt, class_id });
+    });
+
+    const model = document.getElementById('ann2-auto-model')?.value || 'sam3.1';
+
+    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags] };
+
+    try {
+      await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_autoAnnotateSettings)
+      });
+      if (window.toast) toast('Auto annotate settings saved ✓');
+      ann2CloseAutoSettingsModal();
+    } catch (e) {
+      if (window.toast) toast('Failed to save settings', 'err');
+    }
+  };
+
+  window.ann2CancelAutoSettings = function () {
+    ann2CloseAutoSettingsModal();
+  };
+
+  // IoU computation (client-side)
+  function _polygonIoU(polyA, polyB) {
+    const SIZE = 128;
+    const canv = document.createElement('canvas');
+    canv.width = SIZE; canv.height = SIZE;
+    const ctx = canv.getContext('2d');
+
+    function raster(poly) {
+      ctx.clearRect(0, 0, SIZE, SIZE);
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      poly.forEach((p, i) => {
+        const x = p[0] * SIZE, y = p[1] * SIZE;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fill();
+      const data = ctx.getImageData(0, 0, SIZE, SIZE).data;
+      const mask = new Uint8Array(SIZE * SIZE);
+      for (let i = 0; i < mask.length; i++) mask[i] = data[i * 4] > 128 ? 1 : 0;
+      return mask;
+    }
+    const mA = raster(polyA), mB = raster(polyB);
+    let inter = 0, union = 0;
+    for (let i = 0; i < mA.length; i++) {
+      if (mA[i] && mB[i]) inter++;
+      if (mA[i] || mB[i]) union++;
+    }
+    return union === 0 ? 0 : inter / union;
+  }
+
+  // Show/hide processing overlay
+  function _showProcessing(show, detail) {
+    const ov = document.getElementById('ann2-processing-overlay');
+    if (ov) ov.style.display = show ? 'flex' : 'none';
+    const det = document.getElementById('ann2-processing-detail');
+    if (det) det.textContent = detail || '';
+  }
+
+  // Start auto annotate (S key)
+  window.ann2StartAutoAnnotate = async function () {
+    if (!_ds || !_images.length || _autoProcessing) return;
+    if (!_autoAnnotateSettings.prompts || _autoAnnotateSettings.prompts.length === 0) {
+      if (window.toast) toast('Set prompts dulu di settings panel', 'err');
+      return;
+    }
+    _autoProcessing = true;
+    _showProcessing(true, `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`);
+
+    try {
+      const imgObj = _images[_idx];
+      const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-auto-annotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: imgObj.filename,
+          model: _autoAnnotateSettings.model,
+          prompts: _autoAnnotateSettings.prompts
+        })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.success && data.annotations) {
+        let added = 0;
+        data.annotations.forEach(newAnn => {
+          // Client-side dedup against existing _anns
+          let isDup = false;
+          for (const existing of _anns) {
+            if (existing.type === 'polygon' || existing.type === 'bbox') {
+              const existPoly = existing.type === 'bbox'
+                ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+                : existing.points;
+              const iou = _polygonIoU(newAnn.points, existPoly);
+              if (iou > 0.85) { isDup = true; break; }
+            }
+          }
+          if (!isDup) {
+            _anns.push({
+              class_id: newAnn.class_id,
+              points: newAnn.points.map(p => [...p]),
+              type: 'polygon',
+              locked: false
+            });
+            added++;
+          }
+        });
+        if (window.toast) toast(`Auto annotate: ${added} segments added`);
+        _selIdx = _anns.length - 1;
+        _renderAnnList();
+        _redraw();
+      } else {
+        if (window.toast) toast(data.error || 'Auto annotate failed', 'err');
+      }
+    } catch (e) {
+      if (window.toast) toast('Auto annotate error: ' + e.message, 'err');
+    }
+
+    _autoProcessing = false;
+    _showProcessing(false);
+  };
+
+  // Approve auto annotate (A key)
+  window.ann2ApproveAutoAnnotate = async function () {
+    if (!_ds || !_images.length || _autoProcessing) return;
+
+    // Add tags if configured
+    if (_autoAnnotateSettings.on_approved_tags && _autoAnnotateSettings.on_approved_tags.length > 0) {
+      _autoAnnotateSettings.on_approved_tags.forEach(tag => {
+        if (!_curTags.includes(tag)) _curTags.push(tag);
+      });
+      _renderTagsArea();
+
+      // Save tags to server
+      try {
+        const imgObj = _images[_idx];
+        await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/image-tags`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filenames: [imgObj.filename], tags: _curTags })
+        });
+      } catch (e) { console.error('Failed to save tags', e); }
+    }
+
+    // Save annotations
+    await ann2Save();
+
+    // Next image
+    if (_idx < _images.length - 1) {
+      _loadImg(_idx + 1);
+
+      // If auto checkbox is on, auto-process next image
+      if (_autoAnnotateActive) {
+        // Small delay to let image load
+        setTimeout(async () => {
+          await ann2StartAutoAnnotate();
+          // Auto approve recursively if still active
+          if (_autoAnnotateActive && _idx < _images.length - 1) {
+            await ann2ApproveAutoAnnotate();
+          }
+        }, 500);
+      }
+    } else {
+      if (window.toast) toast('Semua gambar sudah di-annotate ✓');
     }
   };
 

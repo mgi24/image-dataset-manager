@@ -36,6 +36,14 @@ def init_db():
             FOREIGN KEY (tag_name) REFERENCES tags (name) ON DELETE CASCADE
         );
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS auto_annotate_settings (
+            dataset_name TEXT PRIMARY KEY,
+            model TEXT DEFAULT 'sam3.1',
+            prompts TEXT DEFAULT '[]',
+            on_approved_tags TEXT DEFAULT '[]'
+        );
+    """)
     conn.commit()
     conn.close()
 
@@ -76,6 +84,16 @@ class TagCreate(BaseModel):
 class ImageTagsUpdate(BaseModel):
     filenames: List[str]
     tags: List[str]
+
+class AutoAnnotateSettingsUpdate(BaseModel):
+    model: str = 'sam3.1'
+    prompts: list = []       # [{"prompt": str, "class_id": int}, ...]
+    on_approved_tags: list = []
+
+class SamAutoAnnotateRequest(BaseModel):
+    filename: str
+    model: str = 'sam3.1'
+    prompts: list = []       # [{"prompt": str, "class_id": int}, ...]
 
 class LLMSettings(BaseModel):
     api_url: str
@@ -822,21 +840,22 @@ class SamPredictRequest(BaseModel):
     filename: str
     points: list   # [{"x": float, "y": float, "label": int}, ...]  label=1 positive, label=0 negative
 
-# Lazy singleton model – loaded once, reused across requests
-_sam_model = None
+# Lazy singleton models – loaded once, reused across requests
+_sam_models = {}
 _sam_model_lock = threading.Lock()
 
-def _get_sam_model():
-    global _sam_model
-    if _sam_model is None:
+def _get_sam_model(model_name='sam3'):
+    global _sam_models
+    if model_name not in _sam_models:
         with _sam_model_lock:
-            if _sam_model is None:
-                model_path = os.path.join(BASE_DIR, "sam3.pt")
+            if model_name not in _sam_models:
+                model_file = f"{model_name}.pt"
+                model_path = os.path.join(BASE_DIR, model_file)
                 if not os.path.exists(model_path):
-                    raise HTTPException(status_code=503, detail="sam3.pt not found")
+                    raise HTTPException(status_code=503, detail=f"{model_file} not found")
                 from ultralytics import SAM
-                _sam_model = SAM(model_path)
-    return _sam_model
+                _sam_models[model_name] = SAM(model_path)
+    return _sam_models[model_name]
 
 
 @app.post("/api/dataset/{dataset_name}/sam-predict")
@@ -862,7 +881,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         import cv2
         import numpy as np
 
-        model = _get_sam_model()
+        model = _get_sam_model('sam3')
 
         # Read image to get dimensions
         img = cv2.imread(image_path)
@@ -915,6 +934,165 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SAM error: {str(e)}")
+
+
+# ── Auto Annotate Settings & Endpoint ──
+
+@app.get("/api/dataset/{dataset_name}/auto-annotate-settings")
+def get_auto_annotate_settings(dataset_name: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT model, prompts, on_approved_tags FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"model": row[0], "prompts": json.loads(row[1]), "on_approved_tags": json.loads(row[2])}
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": []}
+
+
+@app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
+def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettingsUpdate):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(dataset_name) DO UPDATE SET model=excluded.model, prompts=excluded.prompts, on_approved_tags=excluded.on_approved_tags;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags)))
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+def _polygon_iou(poly_a, poly_b):
+    """Approximate IoU between two normalized polygons using pixel rasterization."""
+    import numpy as np
+    SIZE = 256
+    import cv2
+    def _raster(poly):
+        pts = np.array([[int(p[0]*SIZE), int(p[1]*SIZE)] for p in poly], dtype=np.int32)
+        mask = np.zeros((SIZE, SIZE), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts], 1)
+        return mask
+    ma, mb = _raster(poly_a), _raster(poly_b)
+    inter = np.sum(ma & mb)
+    union = np.sum(ma | mb)
+    return float(inter) / max(float(union), 1.0)
+
+
+@app.post("/api/dataset/{dataset_name}/sam-auto-annotate")
+def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
+    """Run SAM auto annotation with text prompts on a single image."""
+    dataset_path = safe_dataset_path(dataset_name)
+
+    # Resolve image path
+    image_path = None
+    for subdir in [os.path.join("annotate", "images"), "images"]:
+        candidate = os.path.normpath(os.path.join(dataset_path, subdir, payload.filename))
+        if candidate.startswith(os.path.normpath(DATASET_DIR)) and os.path.isfile(candidate):
+            image_path = candidate
+            break
+    if not image_path:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if not payload.prompts:
+        raise HTTPException(status_code=400, detail="At least one prompt required")
+
+    try:
+        import cv2
+        import numpy as np
+        from ultralytics.models.sam import SAM3SemanticPredictor
+
+        model_name = payload.model if payload.model in ('sam3', 'sam3.1') else 'sam3.1'
+        model_file = f"{model_name}.pt"
+        model_path = os.path.join(BASE_DIR, model_file)
+        if not os.path.exists(model_path):
+            raise HTTPException(status_code=503, detail=f"{model_file} not found")
+
+        # Read image for dimensions
+        img = cv2.imread(image_path)
+        if img is None:
+            raise HTTPException(status_code=500, detail="Cannot read image")
+        h, w = img.shape[:2]
+
+        # Group prompts by text
+        text_prompts = [p["prompt"] for p in payload.prompts]
+        class_map = {p["prompt"]: p["class_id"] for p in payload.prompts}
+
+        # Setup SAM3 Semantic Predictor
+        overrides = dict(
+            conf=0.5,
+            task="segment",
+            mode="predict",
+            model=model_path,
+            save=False,
+            device="cuda",
+            half=False
+        )
+        predictor = SAM3SemanticPredictor(overrides=overrides)
+        predictor.set_image(image_path)
+        results = predictor(text=text_prompts)
+
+        if not results or len(results) == 0:
+            return {"success": False, "error": "No results from SAM", "annotations": []}
+
+        annotations = []
+        result = results[0]
+
+        if result.masks is None or len(result.masks) == 0:
+            return {"success": False, "error": "No masks generated", "annotations": []}
+
+        masks_data = result.masks.data.cpu().numpy()
+        # cls assignments from result (semantic labels per mask)
+        cls_data = result.boxes.cls.cpu().numpy() if result.boxes is not None and result.boxes.cls is not None else None
+
+        for mi in range(len(masks_data)):
+            mask = masks_data[mi].astype(np.uint8)
+            if mask.shape[0] != h or mask.shape[1] != w:
+                mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                continue
+
+            largest = max(contours, key=cv2.contourArea)
+            polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in largest]
+            if len(polygon) < 3:
+                continue
+
+            # Determine class_id from semantic label index
+            if cls_data is not None and mi < len(cls_data):
+                sem_idx = int(cls_data[mi])
+                if sem_idx < len(text_prompts):
+                    prompt_text = text_prompts[sem_idx]
+                    class_id = class_map.get(prompt_text, 0)
+                else:
+                    class_id = 0
+            else:
+                class_id = payload.prompts[0]["class_id"] if payload.prompts else 0
+
+            # Check IoU against already-accepted annotations (dedup)
+            is_dup = False
+            for existing in annotations:
+                iou = _polygon_iou(polygon, existing["points"])
+                if iou > 0.85:
+                    is_dup = True
+                    break
+            if is_dup:
+                continue
+
+            annotations.append({
+                "class_id": class_id,
+                "points": polygon,
+                "type": "polygon"
+            })
+
+        return {"success": True, "annotations": annotations}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SAM auto-annotate error: {str(e)}")
 
 
 # ─────────────────────────────────────────────
@@ -1135,6 +1313,54 @@ def get_auto_preview(dataset_name: str, filename: str, detections: str):
         headers={"Cache-Control": "no-cache"}
     )
 
+
+
+# ─────────────────────────────────────────────
+# Devlogs & Update routes
+# ─────────────────────────────────────────────
+DEVLOGS_DIR = os.path.join(BASE_DIR, 'devlogs')
+
+@app.get("/api/devlogs")
+def get_devlogs_list():
+    if not os.path.exists(DEVLOGS_DIR):
+        os.makedirs(DEVLOGS_DIR, exist_ok=True)
+    files = []
+    for f in sorted(os.listdir(DEVLOGS_DIR)):
+        if f.endswith(".md"):
+            fp = os.path.join(DEVLOGS_DIR, f)
+            size = os.path.getsize(fp) if os.path.isfile(fp) else 0
+            mtime = os.path.getmtime(fp) if os.path.isfile(fp) else 0
+            files.append({
+                "filename": f,
+                "title": f.replace(".md", "").capitalize(),
+                "size": size,
+                "mtime": mtime
+            })
+    return files
+
+@app.get("/api/devlogs/{filename}")
+def get_devlog_content(filename: str):
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    fp = os.path.join(DEVLOGS_DIR, filename)
+    if not os.path.isfile(fp):
+        raise HTTPException(status_code=404, detail="Devlog file not found")
+    try:
+        with open(fp, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return {
+            "filename": filename,
+            "content": content
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/update")
+def get_update_page():
+    update_path = os.path.join(BASE_DIR, 'update.html')
+    if os.path.exists(update_path):
+        return FileResponse(update_path, media_type="text/html")
+    raise HTTPException(status_code=404, detail="update.html not found")
 
 
 # ─────────────────────────────────────────────

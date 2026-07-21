@@ -36,6 +36,26 @@
         style="display:none; position:absolute; top:calc(100% + 6px); left:0; width:100%; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index:9999; max-height:250px; overflow-y:auto; flex-direction:column; padding:6px;">
       </div>
     </div>
+
+    <div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>
+
+    <!-- Auto Annotate toggle & settings -->
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label id="ann2-auto-annotate-label"
+        style="font-size:.78rem;color:var(--text-muted);white-space:nowrap;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="ann2-auto-annotate-chk" onchange="ann2ToggleAutoAnnotate(this.checked)"
+          style="cursor:pointer;width:14px;height:14px;margin:0;accent-color:#a855f7;">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:#a855f7">
+          <path d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
+        </svg>
+        Auto Annotate
+      </label>
+      <button class="btn btn-ghost" onclick="ann2OpenAutoSettingsModal()" title="Auto Annotate Settings"
+        style="padding:3px 7px; font-size:.75rem; border-radius:5px; color:#a855f7; border:1px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.1); display:flex; align-items:center; gap:4px; cursor:pointer;">
+        ⚙ Settings
+      </button>
+    </div>
+
     <div style="flex:1;"></div>
 
     <div id="ann2-hint-text"
@@ -82,65 +102,145 @@
         <div style="padding:0 8px 10px;">
           <select id="ann2-tag-sel"
             style="width:100%;padding:5px 8px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);font-family:inherit;font-size:.8rem;box-sizing:border-box;cursor:pointer;"
-            onchange="ann2AddSelectedTag(this)">
+            onchange="ann2AddTag(this)">
             <option value="">+ Tambah tag...</option>
           </select>
         </div>
       </div>
     </div>
 
-    <!-- CENTER: Canvas viewport -->
-    <div id="ann2-canvas-wrap" style="flex:1; min-width:0; position:relative; overflow:hidden; background:#111827;">
-      <canvas id="ann2-canvas" style="position:absolute; top:0; left:0; touch-action:none; cursor:grab;"></canvas>
+    <!-- CENTER PANEL: Canvas area -->
+    <div id="ann2-center"
+      style="flex:1; display:flex; flex-direction:column; position:relative; overflow:hidden; background:#07090e; min-width:0;">
+      <div id="ann2-canvas-wrap"
+        style="flex:1; position:relative; overflow:hidden; display:flex; justify-content:center; align-items:center; cursor:crosshair; user-select:none;">
+        <canvas id="ann2-canvas" style="display:block; image-rendering:pixelated;"></canvas>
 
-      <!-- Right-side floating toolbar for tools (Drag, Box, Poly) -->
-      <div id="ann2-floating-tools"
-        style="position:absolute; top:20px; right:20px; display:flex; flex-direction:column; gap:8px; background:rgba(13,18,34,0.85); border:1px solid var(--border); border-radius:8px; padding:6px; z-index:100; backdrop-filter:blur(6px); box-shadow:var(--shadow);">
-        <button class="tog-btn ann2-tool-btn" id="ann2-tool-drag" onclick="ann2SetTool('drag')"
-          title="Drag/Pan Canvas (H) - Pindahkan canvas dengan klik & seret"
-          style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
-            <path
-              d="M13,6V11H18V7.75L22.25,12L18,16.25V13H13V18H16.25L12,22.25L7.75,18H11V13H6V16.25L1.75,12L6,7.75V11H11V6H7.75L12,1.75L16.25,6H13Z" />
-          </svg>
-        </button>
-        <button class="tog-btn ann2-tool-btn" id="ann2-tool-bbox" onclick="ann2SetTool('bbox')"
-          title="Bounding Box (B) - Buat kotak pembatas objek"
-          style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
-            <path
-              d="M4,6H6V4H4M4,14H6V12H4M4,18H6V16H4M4,10H6V8H4M8,4V6H10V4M12,4V6H14V4M18,4H16V6H18V8H20V6A2,2 0 0,0 18,4M8,20V18H10V20M20,16H18V18H16V20H18A2,2 0 0,0 20,18V16M20,8H18V10H20M20,12H18V14H20M12,20V18H14V20M4,22H6V20H4A2,2 0 0,1 2,18V16H4V18H6V20H4V22M2,6V4A2,2 0 0,1 4,2H6V4H4V6H2Z" />
-          </svg>
-        </button>
-        <button class="tog-btn ann2-tool-btn" id="ann2-tool-polygon" onclick="ann2SetTool('polygon')"
-          title="Polygon (P) - Buat anotasi segmentasi poligon"
-          style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
-            <path
-              d="M2,2H8V4.26L14.74,8H18V10L22,14L18.93,17.07L16,14.14V16H13.26L10,19.26V22H4V16H6.74L10,12.74V10.26L3.26,8H2V2M4,4V6H5.74L12.74,9.26V13L10,15.74V18H6V14.26L2.74,11H2H4V10V4M14,2H22V10H14V2M16,4V8H20V4H16M4,18H8V22H4V18Z" />
-          </svg>
-        </button>
-        <button class="tog-btn ann2-tool-btn" id="ann2-tool-edit" onclick="ann2SetTool('edit')"
-          title="Edit Mode (E) - Edit dan geser anotasi serta titik kontrol"
-          style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
-            <path
-              d="M13.64,21.97C13.14,22.21 12.54,22 12.31,21.5L10.13,16.76L7.62,19.27C7.23,19.66 6.58,19.66 6.19,19.27C6,19.08 5.9,18.83 5.9,18.57V3.5C5.9,2.95 6.35,2.5 6.9,2.5C7.16,2.5 7.41,2.6 7.6,2.79L18.58,13.77C18.97,14.16 18.97,14.81 18.58,15.2C18.39,15.39 18.14,15.49 17.88,15.49H14.88L17.07,20.23C17.3,20.73 17.1,21.33 16.6,21.56L13.64,21.97Z" />
-          </svg>
-        </button>
-        <div style="width:28px;height:1px;background:var(--border);margin:2px auto;"></div>
-        <button class="tog-btn ann2-tool-btn" id="ann2-tool-magic" onclick="ann2SetTool('magic')"
-          title="Magic Selection (M) - SAM 3.1 point-to-segment&#10;Click = positive point&#10;Ctrl+Click = negative point&#10;Enter = konfirmasi · Esc = batal"
-          style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer; position:relative;">
-          <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
-            <path
-              d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
-          </svg>
-        </button>
+        <!-- Floating toolbar overlay -->
+        <div id="ann2-floating-tools"
+          style="position:absolute; top:16px; right:16px; display:flex; flex-direction:column; gap:4px; background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; padding:4px; box-shadow:0 4px 16px rgba(0,0,0,0.4); z-index:100;">
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-drag" onclick="ann2SetTool('drag')" title="Pan / Zoom (H)"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path
+                d="M18,11H15V14H18V11M18,7H15V10H18V7M18,15H15V18H18V15M11,11H8V14H11V11M11,7H8V10H11V7M11,15H8V18H11V15M7,11H4V14H7V11M7,7H4V10H7V7M7,15H4V18H7V15Z" />
+            </svg>
+          </button>
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-bbox" onclick="ann2SetTool('bbox')"
+            title="Bounding Box (B)"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path
+                d="M3,3H21V21H3V3M5,5V19H19V5H5Z" />
+            </svg>
+          </button>
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-polygon" onclick="ann2SetTool('polygon')"
+            title="Polygon (P) - Enter = konfirmasi · Esc = batal"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path
+                d="M17,15.7V13H19V17H15V15H17.7L12.5,9.8L7.8,14.5L3,9.7L4.4,8.3L7.8,11.7L12.5,7L18.4,12.9V10H20.4V14H18.4V15.7H17Z" />
+            </svg>
+          </button>
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-edit" onclick="ann2SetTool('edit')"
+            title="Edit BBox/Polygon (E)"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path
+                d="M13.64,21.97C13.14,22.21 12.54,22 12.31,21.5L10.13,16.76L7.62,19.27C7.23,19.66 6.58,19.66 6.19,19.27C6,19.08 5.9,18.83 5.9,18.57V3.5C5.9,2.95 6.35,2.5 6.9,2.5C7.16,2.5 7.41,2.6 7.6,2.79L18.58,13.77C18.97,14.16 18.97,14.81 18.58,15.2C18.39,15.39 18.14,15.49 17.88,15.49H14.88L17.07,20.23C17.3,20.73 17.1,21.56L13.64,21.97Z" />
+            </svg>
+          </button>
+          <div style="width:28px;height:1px;background:var(--border);margin:2px auto;"></div>
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-magic" onclick="ann2SetTool('magic')"
+            title="Magic Selection (M) - SAM 3.1 point-to-segment&#10;Click = positive point&#10;Ctrl+Click = negative point&#10;Enter = konfirmasi · Esc = batal"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer; position:relative;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path
+                d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
+            </svg>
+          </button>
+          <button class="tog-btn ann2-tool-btn" id="ann2-tool-autoann" onclick="ann2SetTool('autoann')"
+            title="Auto Annotate - SAM text-prompt auto segmentation"
+            style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer; position:relative;">
+            <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
+              <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4M12,6L14.12,10.5L19,11.13L15.5,14.5L16.24,19.37L12,17.12L7.76,19.37L8.5,14.5L5,11.13L9.88,10.5L12,6Z" />
+            </svg>
+          </button>
+        </div>
+
+
+        <!-- Processing overlay -->
+        <div id="ann2-processing-overlay" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.7); z-index:200; justify-content:center; align-items:center; flex-direction:column; gap:16px;">
+          <div class="ann2-processing-spinner"></div>
+          <div style="color:#e2e8f0; font-size:1.1rem; font-weight:600; letter-spacing:.03em;">Processing...</div>
+          <div id="ann2-processing-detail" style="color:var(--text-muted); font-size:.8rem;"></div>
+        </div>
+
+        <!-- Shortcut hints (visible in auto annotate mode) -->
+        <div id="ann2-auto-hints" style="display:none; position:absolute; top:20px; right:70px; z-index:100; flex-direction:column; gap:4px;">
+          <div class="ann2-shortcut-badge"><kbd>S</kbd> Process</div>
+          <div class="ann2-shortcut-badge"><kbd>A</kbd> Approve</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Auto Annotate Settings Popup Modal -->
+<div id="ann2-auto-settings-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); z-index:10000; align-items:center; justify-content:center;">
+  <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:12px; box-shadow:0 16px 40px rgba(0,0,0,0.6); width:540px; max-width:92vw; max-height:85vh; display:flex; flex-direction:column; overflow:hidden; animation: ann2-popin 0.2s ease-out;">
+    
+    <!-- Modal Header -->
+    <div style="padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,0.02);">
+      <div style="display:flex; align-items:center; gap:8px; font-weight:600; font-size:.95rem; color:#c4b5fd;">
+        <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#a855f7">
+          <path d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
+        </svg>
+        Auto Annotate Settings
+      </div>
+      <button onclick="ann2CloseAutoSettingsModal()" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.2rem; line-height:1; padding:4px;">✕</button>
+    </div>
+
+    <!-- Modal Body -->
+    <div style="padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:16px;">
+      
+      <!-- Model selection -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Model</label>
+        <select id="ann2-auto-model" style="padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; color:var(--text-primary); font-family:inherit; font-size:.85rem; cursor:pointer;">
+          <option value="sam3">SAM 3</option>
+          <option value="sam3.1" selected>SAM 3.1</option>
+        </select>
       </div>
 
+      <!-- Prompts & Class Mapping -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Prompts & Class Mapping</label>
+          <button class="btn btn-ghost" onclick="ann2AddPromptRow()" style="font-size:.76rem; padding:3px 10px;">+ Add Prompt</button>
+        </div>
+        <div id="ann2-auto-prompts" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+
+      <!-- On Approved Add Tags -->
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">On Approved Add Tags</label>
+        <div id="ann2-auto-tags-area" style="display:flex; flex-wrap:wrap; gap:6px; min-height:32px; padding:4px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px;"></div>
+        <select id="ann2-auto-tag-sel" onchange="ann2AddAutoTag(this)" style="padding:7px 10px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; color:var(--text-primary); font-family:inherit; font-size:.82rem; cursor:pointer;">
+          <option value="">+ Tambah tag...</option>
+        </select>
+      </div>
 
     </div>
+
+    <!-- Modal Footer -->
+    <div style="padding:12px 18px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; background:rgba(0,0,0,0.15);">
+      <button class="btn btn-ghost" onclick="ann2CloseAutoSettingsModal()" style="padding:6px 16px; font-size:.82rem;">Cancel</button>
+      <button class="btn btn-accent" onclick="ann2SaveAutoSettings()" style="padding:6px 20px; font-size:.82rem; background:linear-gradient(135deg, #a855f7, #7c3aed); border:none;">Save Settings</button>
+    </div>
+
   </div>
 </div>
 
@@ -150,6 +250,84 @@
     color: #fff !important;
     border-color: var(--accent) !important;
   }
+
+  #ann2-tool-autoann.active-tool {
+    background: linear-gradient(135deg, #a855f7, #7c3aed) !important;
+    box-shadow: 0 0 12px rgba(168, 85, 247, 0.6) !important;
+  }
+
+  /* Processing overlay spinner */
+  .ann2-processing-spinner {
+    width: 40px; height: 40px;
+    border: 3px solid rgba(255,255,255,0.15);
+    border-top-color: #a855f7;
+    border-radius: 50%;
+    animation: ann2-spin 0.8s linear infinite;
+  }
+  @keyframes ann2-spin { to { transform: rotate(360deg); } }
+
+  /* Shortcut badges */
+  .ann2-shortcut-badge {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    background: rgba(13,18,34,0.85);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: .72rem;
+    color: var(--text-secondary);
+    backdrop-filter: blur(6px);
+    white-space: nowrap;
+  }
+  .ann2-shortcut-badge kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 20px;
+    padding: 0 5px;
+    background: rgba(168, 85, 247, 0.25);
+    border: 1px solid rgba(168, 85, 247, 0.5);
+    border-radius: 4px;
+    font-size: .72rem;
+    font-weight: 700;
+    color: #c4b5fd;
+    font-family: inherit;
+  }
+
+  /* Auto annotate prompt row */
+  .ann2-prompt-row {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ann2-prompt-row input {
+    flex: 1; padding: 5px 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-primary);
+    font-family: inherit; font-size: .8rem;
+  }
+  .ann2-prompt-row select {
+    width: 130px; padding: 5px 8px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text-primary);
+    font-family: inherit; font-size: .8rem; cursor: pointer;
+  }
+  .ann2-prompt-row .ann2-prompt-del {
+    background: none; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 2px; font-size: 1rem; line-height: 1;
+  }
+  .ann2-prompt-row .ann2-prompt-del:hover { color: var(--danger); }
+
+  /* Auto tag chips */
+  .ann2-auto-tag-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 7px;
+    background: rgba(168, 85, 247, .15);
+    border: 1px solid rgba(168, 85, 247, .28);
+    border-radius: 12px;
+    font-size: .74rem;
+    color: #c4b5fd;
+  }
+  .ann2-auto-tag-chip button {
+    background: none; border: none; color: #c4b5fd;
+    cursor: pointer; padding: 0; font-size: .9rem; line-height: 1; opacity: .7;
+  }
+  .ann2-auto-tag-chip button:hover { opacity: 1; }
 
   .ann2-ann-item {
     display: flex;

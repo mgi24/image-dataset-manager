@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Devlogs Update — System Architecture & Logs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+  
+  <!-- Marked.js for Markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Mermaid.js for node diagram rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <style>
+    :root {
+      --gh-bg: #0d1117;
+      --gh-panel: #161b22;
+      --gh-header: #161b22;
+      --gh-border: #30363d;
+      --gh-text: #c9d1d9;
+      --gh-muted: #8b949e;
+      --gh-blue: #58a6ff;
+      --gh-purple: #bc8cff;
+      --gh-green: #3fb950;
+      --gh-code-bg: rgba(110, 118, 129, 0.1);
+      --gh-hover: #21262d;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--gh-bg);
+      color: var(--gh-text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* GitHub-style Header */
+    .devlog-header {
+      background: var(--gh-header);
+      border-bottom: 1px solid var(--gh-border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .devlog-title-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .devlog-brand {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--gh-purple);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .devlog-breadcrumb {
+      font-size: 0.85rem;
+      color: var(--gh-muted);
+    }
+    .devlog-file-active {
+      color: var(--gh-text);
+      font-weight: 600;
+    }
+    .badge-md {
+      background: rgba(188, 140, 255, 0.15);
+      border: 1px solid rgba(188, 140, 255, 0.4);
+      color: var(--gh-purple);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+
+    /* Layout */
+    .devlog-container {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .devlog-sidebar {
+      width: 280px;
+      background: var(--gh-panel);
+      border-right: 1px solid var(--gh-border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .sidebar-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--gh-border);
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--gh-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sidebar-search {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--gh-border);
+    }
+    .sidebar-search input {
+      width: 100%;
+      padding: 6px 10px;
+      background: var(--gh-bg);
+      border: 1px solid var(--gh-border);
+      border-radius: 6px;
+      color: var(--gh-text);
+      font-size: 0.8rem;
+      font-family: inherit;
+    }
+    .sidebar-search input:focus {
+      outline: none;
+      border-color: var(--gh-blue);
+    }
+    .file-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      font-size: 0.83rem;
+      color: var(--gh-muted);
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: all 0.15s ease;
+    }
+    .file-item:hover {
+      background: var(--gh-hover);
+      color: var(--gh-text);
+    }
+    .file-item.active {
+      background: var(--gh-hover);
+      color: var(--gh-blue);
+      border-left-color: var(--gh-blue);
+      font-weight: 600;
+    }
+    .file-icon {
+      fill: currentColor;
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+    }
+    .file-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-size {
+      font-size: 0.7rem;
+      color: var(--gh-muted);
+    }
+
+    /* Main Content */
+    .devlog-main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 30px 40px;
+      background: var(--gh-bg);
+    }
+
+    /* GitHub Markdown Style Rendering */
+    .markdown-body {
+      max-width: 900px;
+      margin: 0 auto;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    .markdown-body h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--gh-border);
+      margin-bottom: 18px;
+      color: var(--gh-text);
+    }
+    .markdown-body h2 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--gh-border);
+      margin-top: 24px;
+      margin-bottom: 14px;
+      color: var(--gh-text);
+    }
+    .markdown-body h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-top: 18px;
+      margin-bottom: 10px;
+    }
+    .markdown-body p {
+      margin-bottom: 14px;
+      color: var(--gh-text);
+    }
+    .markdown-body ul, .markdown-body ol {
+      padding-left: 24px;
+      margin-bottom: 16px;
+    }
+    .markdown-body li {
+      margin-bottom: 4px;
+    }
+    .markdown-body code {
+      font-family: 'Fira Code', Consolas, monospace;
+      font-size: 0.85em;
+      background: var(--gh-code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--gh-purple);
+    }
+    .markdown-body pre {
+      background: var(--gh-panel);
+      border: 1px solid var(--gh-border);
+      border-radius: 8px;
+      padding: 14px;
+      overflow-x: auto;
+      margin-bottom: 18px;
+    }
+    .markdown-body pre code {
+      background: transparent;
+      padding: 0;
+      color: var(--gh-text);
+    }
+    .markdown-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 18px;
+    }
+    .markdown-body th, .markdown-body td {
+      border: 1px solid var(--gh-border);
+      padding: 8px 14px;
+      font-size: 0.85rem;
+    }
+    .markdown-body th {
+      background: var(--gh-panel);
+      font-weight: 600;
+    }
+    .markdown-body tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.015);
+    }
+    .markdown-body blockquote {
+      border-left: 4px solid var(--gh-blue);
+      padding: 8px 16px;
+      background: var(--gh-panel);
+      border-radius: 0 6px 6px 0;
+      color: var(--gh-muted);
+      margin-bottom: 16px;
+    }
+
+    /* Mermaid Container & Hover Effects */
+    .mermaid-box {
+      background: var(--gh-panel);
+      border: 1px solid var(--gh-border);
+      border-radius: 10px;
+      padding: 20px;
+      margin: 20px 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow-x: auto;
+      position: relative;
+      cursor: pointer;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .mermaid-box:hover {
+      border-color: var(--gh-purple);
+      box-shadow: 0 0 16px rgba(188, 140, 255, 0.25);
+    }
+    .mermaid-box::after {
+      content: '🔍 Klik untuk Zoom Fullscreen';
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid var(--gh-border);
+      color: var(--gh-purple);
+      font-size: 0.72rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+    .mermaid-box:hover::after {
+      opacity: 1;
+    }
+    .mermaid-box svg {
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* Action buttons */
+    .btn-dev {
+      background: var(--gh-panel);
+      border: 1px solid var(--gh-border);
+      color: var(--gh-text);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+    .btn-dev:hover {
+      background: var(--gh-hover);
+      border-color: var(--gh-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Bar -->
+  <header class="devlog-header">
+    <div class="devlog-title-area">
+      <div class="devlog-brand">
+        <svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor">
+          <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6L14.12,10.5L19,11.13L15.5,14.5L16.24,19.37L12,17.12L7.76,19.37L8.5,14.5L5,11.13L9.88,10.5L12,6Z"/>
+        </svg>
+        Devlogs & Updates
+      </div>
+      <span style="color:var(--gh-border)">/</span>
+      <div class="devlog-breadcrumb">
+        devlogs / <span class="devlog-file-active" id="hdr-filename">Select document...</span>
+      </div>
+      <span class="badge-md" id="hdr-badge">Markdown</span>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:8px;">
+      <button class="btn-dev" onclick="loadDevlogsList()">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor"><path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"/></svg>
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- Container -->
+  <div class="devlog-container">
+    
+    <!-- Sidebar -->
+    <aside class="devlog-sidebar">
+      <div class="sidebar-header">
+        <span>Files</span>
+        <span id="file-count" style="background:var(--gh-bg); padding:1px 6px; border-radius:10px; font-size:0.7rem;">0</span>
+      </div>
+      <div class="sidebar-search">
+        <input type="text" id="search-inp" placeholder="Search devlog..." oninput="filterFiles()">
+      </div>
+      <div class="file-list" id="file-list"></div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="devlog-main" id="devlog-main">
+      <div class="markdown-body" id="md-content">
+        <div style="text-align:center; padding:60px 0; color:var(--gh-muted);">
+          Loading documentation files...
+        </div>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Mermaid Zoom Fullscreen Modal -->
+  <div id="mermaid-zoom-modal" style="display:none; position:fixed; inset:0; background:rgba(13,17,23,0.92); backdrop-filter:blur(8px); z-index:99999; flex-direction:column; overflow:hidden;">
+    
+    <!-- Controls Header -->
+    <div style="padding:12px 20px; background:var(--gh-panel); border-bottom:1px solid var(--gh-border); display:flex; align-items:center; justify-content:space-between; z-index:10;">
+      <div style="display:flex; align-items:center; gap:10px; font-weight:600; font-size:.9rem; color:var(--gh-purple);">
+        <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M15.5,14H14.71L14.43,13.73C15.41,12.59 16,11.11 16,9.5A6.5,6.5 0 0,0 9.5,3A6.5,6.5 0 0,0 3,9.5A6.5,6.5 0 0,0 9.5,16C11.11,16 12.59,15.41 13.73,14.43L14,14.71V15.5L19,20.5L20.5,19L15.5,14M9.5,14C7,14 5,12 5,9.5C5,7 7,5 9.5,5C12,5 14,7 14,9.5C14,12 12,14 9.5,14M12,10H10V12H9V10H7V9H9V7H10V9H12V10Z"/></svg>
+        Mermaid Diagram Zoom Viewer
+        <span style="font-size:0.75rem; color:var(--gh-muted); font-weight:normal;">(Scroll Wheel = Zoom · Drag Mouse = Pan)</span>
+      </div>
+      
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button class="btn-dev" onclick="zoomMermaid(1.2)" title="Zoom In">+</button>
+        <button class="btn-dev" onclick="zoomMermaid(0.8)" title="Zoom Out">-</button>
+        <button class="btn-dev" onclick="resetMermaidZoom()" title="Reset View">⟲ Reset</button>
+        <div style="width:1px; height:18px; background:var(--gh-border); margin:0 4px;"></div>
+        <button onclick="closeMermaidZoomModal()" title="Close (Esc)" style="background:none; border:none; color:var(--gh-muted); cursor:pointer; font-size:1.4rem; line-height:1; padding:2px 6px;">✕</button>
+      </div>
+    </div>
+
+    <!-- Viewport Container -->
+    <div id="mermaid-zoom-viewport" style="flex:1; position:relative; overflow:hidden; cursor:grab; display:flex; align-items:center; justify-content:center; user-select:none;">
+      <div id="mermaid-zoom-stage" style="transform-origin: center center; display:inline-block; will-change: transform;"></div>
+    </div>
+
+  </div>
+
+  <script>
+    // Initialize Mermaid JS
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      securityLevel: 'loose',
+      flowchart: { curve: 'basis', useMaxWidth: true },
+      themeVariables: {
+        darkMode: true,
+        background: '#161b22',
+        primaryColor: '#bc8cff',
+        primaryTextColor: '#c9d1d9',
+        primaryBorderColor: '#30363d',
+        lineColor: '#58a6ff'
+      }
+    });
+
+    let _devlogs = [];
+    let _activeFilename = '';
+
+    // Load devlogs list
+    async function loadDevlogsList() {
+      try {
+        const resp = await fetch('/api/devlogs');
+        if (resp.ok) {
+          _devlogs = await resp.json();
+          renderFileList();
+          if (_devlogs.length > 0 && !_activeFilename) {
+            selectDevlog(_devlogs[0].filename);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load devlogs list:', e);
+      }
+    }
+
+    function filterFiles() {
+      renderFileList();
+    }
+
+    function renderFileList() {
+      const q = document.getElementById('search-inp').value.toLowerCase().trim();
+      const listEl = document.getElementById('file-list');
+      const countEl = document.getElementById('file-count');
+      listEl.innerHTML = '';
+
+      const filtered = _devlogs.filter(f => f.filename.toLowerCase().includes(q));
+      countEl.textContent = filtered.length;
+
+      filtered.forEach(f => {
+        const item = document.createElement('div');
+        item.className = `file-item ${f.filename === _activeFilename ? 'active' : ''}`;
+        item.onclick = () => selectDevlog(f.filename);
+
+        const icon = `<svg class="file-icon" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/></svg>`;
+        const sz = f.size ? `${(f.size / 1024).toFixed(1)} KB` : '';
+
+        item.innerHTML = `${icon} <span class="file-name">${f.filename}</span> <span class="file-size">${sz}</span>`;
+        listEl.appendChild(item);
+      });
+    }
+
+    async function selectDevlog(filename) {
+      _activeFilename = filename;
+      document.getElementById('hdr-filename').textContent = filename;
+      renderFileList();
+
+      const mainEl = document.getElementById('md-content');
+      mainEl.innerHTML = `<div style="text-align:center; padding:40px 0; color:var(--gh-muted);">Loading ${filename}...</div>`;
+
+      try {
+        const resp = await fetch(`/api/devlogs/${encodeURIComponent(filename)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          renderMarkdown(data.content);
+        } else {
+          mainEl.innerHTML = `<div style="color:#f85149; text-align:center; padding:40px 0;">Failed to load file: ${filename}</div>`;
+        }
+      } catch (e) {
+        mainEl.innerHTML = `<div style="color:#f85149; text-align:center; padding:40px 0;">Error loading file: ${e.message}</div>`;
+      }
+    }
+
+    function renderMarkdown(mdText) {
+      const mainEl = document.getElementById('md-content');
+      
+      // Parse markdown to HTML
+      const htmlContent = marked.parse(mdText);
+      mainEl.innerHTML = htmlContent;
+
+      // Extract code blocks with class "language-mermaid" or "mermaid"
+      const mermaidNodes = mainEl.querySelectorAll('pre code.language-mermaid, pre code.mermaid');
+      
+      mermaidNodes.forEach((codeNode, idx) => {
+        const preNode = codeNode.parentElement;
+        const codeText = codeNode.textContent;
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-box';
+        container.id = `mermaid-graph-${idx}`;
+        container.textContent = codeText;
+
+        preNode.replaceWith(container);
+      });
+
+      // Render Mermaid nodes
+      setTimeout(() => {
+        const graphs = mainEl.querySelectorAll('.mermaid-box');
+        if (graphs.length > 0) {
+          mermaid.run({
+            nodes: graphs
+          }).then(() => {
+            // Attach zoom modal click handlers
+            graphs.forEach(g => {
+              g.title = "Klik untuk zoom diagram full-screen";
+              g.onclick = () => {
+                const svg = g.querySelector('svg');
+                if (svg) {
+                  openMermaidZoomModal(svg.outerHTML);
+                }
+              };
+            });
+          }).catch(err => {
+            console.error('Mermaid render error:', err);
+          });
+        }
+      }, 50);
+    }
+
+    // ── Mermaid Zoom & Pan Modal Logic ──
+    let _zoomScale = 1;
+    let _zoomPanX = 0;
+    let _zoomPanY = 0;
+    let _isPanning = false;
+    let _panStartX = 0;
+    let _panStartY = 0;
+    let _svgBaseWidth = 1000;
+    let _svgBaseHeight = 700;
+    let _zoomListenersAttached = false;
+
+    function openMermaidZoomModal(svgHtml) {
+      const modal = document.getElementById('mermaid-zoom-modal');
+      const stage = document.getElementById('mermaid-zoom-stage');
+      if (!modal || !stage) return;
+
+      stage.innerHTML = svgHtml;
+      
+      const svg = stage.querySelector('svg');
+      if (svg) {
+        // Remove fixed width/height attributes so SVG scales crisp & vectorially
+        svg.removeAttribute('width');
+        svg.removeAttribute('height');
+        svg.style.maxWidth = 'none';
+        svg.style.maxHeight = 'none';
+
+        // Extract base vector dimensions from viewBox or bounding box
+        let baseW = 0, baseH = 0;
+        const viewBox = svg.getAttribute('viewBox');
+        if (viewBox) {
+          const parts = viewBox.split(/[\s,]+/).map(Number);
+          if (parts.length >= 4 && parts[2] > 0 && parts[3] > 0) {
+            baseW = parts[2];
+            baseH = parts[3];
+          }
+        }
+        if (!baseW || !baseH) {
+          const rect = svg.getBoundingClientRect();
+          baseW = rect.width || 1000;
+          baseH = rect.height || 700;
+        }
+
+        _svgBaseWidth = baseW;
+        _svgBaseHeight = baseH;
+      }
+
+      modal.style.display = 'flex';
+
+      setTimeout(() => {
+        fitMermaidToScreen();
+      }, 30);
+
+      setupMermaidZoomListeners();
+    }
+
+    function closeMermaidZoomModal() {
+      const modal = document.getElementById('mermaid-zoom-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function fitMermaidToScreen() {
+      const vp = document.getElementById('mermaid-zoom-viewport');
+      if (!vp || !_svgBaseWidth || !_svgBaseHeight) return;
+
+      const vpWidth = vp.clientWidth - 80;
+      const vpHeight = vp.clientHeight - 80;
+
+      if (vpWidth > 0 && vpHeight > 0) {
+        const scaleX = vpWidth / _svgBaseWidth;
+        const scaleY = vpHeight / _svgBaseHeight;
+        _zoomScale = Math.min(scaleX, scaleY);
+        // Comfortable padding factor
+        _zoomScale = Math.max(0.15, _zoomScale * 0.95);
+      } else {
+        _zoomScale = 1.0;
+      }
+
+      _zoomPanX = 0;
+      _zoomPanY = 0;
+      applyMermaidTransform();
+    }
+
+    function resetMermaidZoom() {
+      fitMermaidToScreen();
+    }
+
+    function zoomMermaid(factor) {
+      _zoomScale *= factor;
+      _zoomScale = Math.min(Math.max(_zoomScale, 0.1), 40);
+      applyMermaidTransform();
+    }
+
+    function applyMermaidTransform() {
+      const stage = document.getElementById('mermaid-zoom-stage');
+      const svg = stage ? stage.querySelector('svg') : null;
+      if (stage && svg) {
+        // Scale SVG element dimensions directly to force sharp vector re-rasterization at screen DPI!
+        svg.style.width = (_svgBaseWidth * _zoomScale) + 'px';
+        svg.style.height = (_svgBaseHeight * _zoomScale) + 'px';
+        svg.style.maxWidth = 'none';
+        svg.style.maxHeight = 'none';
+
+        // Translate stage smoothly for 60 FPS panning
+        stage.style.transform = `translate3d(${_zoomPanX}px, ${_zoomPanY}px, 0px)`;
+      }
+    }
+
+    function setupMermaidZoomListeners() {
+      if (_zoomListenersAttached) return;
+      _zoomListenersAttached = true;
+
+      const vp = document.getElementById('mermaid-zoom-viewport');
+      if (!vp) return;
+
+      // Wheel event (Zoom with scroll wheel)
+      vp.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.15 : 0.85;
+        zoomMermaid(factor);
+      }, { passive: false });
+
+      // Mouse Drag (Pan) - Smooth 60fps without CSS transition fighting
+      vp.addEventListener('mousedown', (e) => {
+        _isPanning = true;
+        _panStartX = e.clientX - _zoomPanX;
+        _panStartY = e.clientY - _zoomPanY;
+        vp.style.cursor = 'grabbing';
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!_isPanning) return;
+        _zoomPanX = e.clientX - _panStartX;
+        _zoomPanY = e.clientY - _panStartY;
+        applyMermaidTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (_isPanning) {
+          _isPanning = false;
+          if (vp) vp.style.cursor = 'grab';
+        }
+      });
+
+      // Keyboard Esc to close
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          closeMermaidZoomModal();
+        }
+      });
+    }
+
+    // Auto load on init
+    window.addEventListener('DOMContentLoaded', loadDevlogsList);
+  </script>
+
+</body>
+</html>

@@ -64,7 +64,7 @@ function restoreFromURL(initial = true) {
 // HTML Partials Loading
 // ═══════════════════════════════════════════
 async function loadPartials() {
-  const pages = ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'settings'];
+  const pages = ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'update', 'settings'];
   for (const page of pages) {
     const res = await fetch(`/${page}.html?t=${Date.now()}`);
     if (!res.ok) {
@@ -244,7 +244,7 @@ function loadDataset(name, targetPage = 'dataset', pushNav = true) {
 // ═══════════════════════════════════════════
 function switchPage(p, pushNav = true) {
   currentPage = p;
-  ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'settings'].forEach(n => {
+  ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'update', 'settings'].forEach(n => {
     const el = document.getElementById(`nav-${n}`);
     if (el) el.classList.toggle('active', n === p);
   });
@@ -255,6 +255,8 @@ function switchPage(p, pushNav = true) {
   if (pa2) pa2.style.display = p === 'annotate2' ? 'flex' : 'none';
   document.getElementById('page-categorize').style.display = p === 'categorize' ? '' : 'none';
   document.getElementById('page-auto').style.display = p === 'auto' ? '' : 'none';
+  const pup = document.getElementById('page-update');
+  if (pup) pup.style.display = p === 'update' ? 'flex' : 'none';
   document.getElementById('page-settings').style.display = p === 'settings' ? '' : 'none';
   const isGrid = p === 'dataset' || p === 'annotation';
   document.getElementById('hdr-srch-wrap').style.display = isGrid ? '' : 'none';
