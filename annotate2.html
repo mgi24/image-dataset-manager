@@ -54,6 +54,12 @@
         style="padding:3px 7px; font-size:.75rem; border-radius:5px; color:#a855f7; border:1px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.1); display:flex; align-items:center; gap:4px; cursor:pointer;">
         ⚙ Settings
       </button>
+      <!-- IOU Rejected Toggle -->
+      <button id="ann2-iou-toggle" onclick="ann2ToggleIouRejected()" title="Show/hide annotations rejected due to IoU overlap"
+        style="padding:3px 8px; font-size:.72rem; border-radius:5px; border:1px solid rgba(239,68,68,0.3); background:rgba(239,68,68,0.08); color:#f87171; display:flex; align-items:center; gap:4px; cursor:pointer; transition:all .15s; white-space:nowrap;">
+        <svg viewBox="0 0 24 24" style="width:11px;height:11px;fill:currentColor;flex-shrink:0"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7Z"/></svg>
+        IoU
+      </button>
     </div>
 
     <div style="flex:1;"></div>
@@ -179,7 +185,24 @@
         <!-- Shortcut hints (visible in auto annotate mode) -->
         <div id="ann2-auto-hints" style="display:none; position:absolute; top:20px; right:70px; z-index:100; flex-direction:column; gap:4px;">
           <div class="ann2-shortcut-badge"><kbd>S</kbd> Process</div>
-          <div class="ann2-shortcut-badge"><kbd>A</kbd> Approve</div>
+          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm</div>
+          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel</div>
+          <div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete ann</div>
+        </div>
+
+        <!-- Simplify Slider Panel (shown when temp ann selected during review) -->
+        <div id="ann2-simplify-panel" style="display:none; position:absolute; top:160px; right:70px; z-index:101; flex-direction:column; gap:6px; background:rgba(13,18,34,0.92); border:1px solid var(--border); border-radius:8px; padding:10px 12px; backdrop-filter:blur(8px); min-width:180px;">
+          <div style="font-size:.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">Simplify</div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <input type="range" id="ann2-simplify-slider" min="1" max="100" value="100"
+              style="flex:1; accent-color:#a855f7; cursor:pointer;"
+              oninput="ann2OnSimplifySlider(this.value)">
+            <span id="ann2-simplify-val" style="font-size:.78rem; color:#c4b5fd; min-width:32px; text-align:right;">100%</span>
+          </div>
+          <button id="ann2-simplify-apply" onclick="ann2ApplySimplify()" disabled
+            style="padding:4px 10px; font-size:.75rem; border-radius:5px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; cursor:not-allowed; opacity:0.38; transition:opacity .15s;">
+            Apply
+          </button>
         </div>
 
       </div>
@@ -215,6 +238,27 @@
 
   <!-- Panel Body -->
   <div style="padding:14px 16px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; flex:1; min-height:0;">
+
+    <!-- Confidence & IoU Sliders -->
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      <label style="font-size:.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Detection Thresholds</label>
+      <div style="display:flex; flex-direction:column; gap:5px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:.78rem; color:var(--text-secondary); min-width:36px;">Conf</span>
+          <input type="range" id="ann2-conf-slider" min="1" max="99" value="25"
+            style="flex:1; accent-color:#a855f7; cursor:pointer;"
+            oninput="ann2MarkSettingsDirty(); document.getElementById('ann2-conf-val').textContent=this.value+'%'">
+          <span id="ann2-conf-val" style="font-size:.78rem; color:#c4b5fd; min-width:34px; text-align:right;">25%</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:.78rem; color:var(--text-secondary); min-width:36px;">IoU</span>
+          <input type="range" id="ann2-iou-slider" min="1" max="99" value="85"
+            style="flex:1; accent-color:#a855f7; cursor:pointer;"
+            oninput="ann2MarkSettingsDirty(); document.getElementById('ann2-iou-val').textContent=this.value+'%'">
+          <span id="ann2-iou-val" style="font-size:.78rem; color:#c4b5fd; min-width:34px; text-align:right;">85%</span>
+        </div>
+      </div>
+    </div>
 
     <!-- Model selection -->
     <div style="display:flex; flex-direction:column; gap:5px;">
@@ -282,6 +326,9 @@
   #ann2-auto-settings-modal.is-dragging #ann2-auto-settings-header { cursor: grabbing; }
   #ann2-save-settings-btn:not([disabled]) { opacity: 1 !important; cursor: pointer !important; }
   #ann2-save-settings-btn[disabled]       { opacity: 0.38 !important; cursor: not-allowed !important; }
+  #ann2-simplify-apply:not([disabled])    { opacity: 1 !important; cursor: pointer !important; }
+  #ann2-simplify-apply[disabled]          { opacity: 0.38 !important; cursor: not-allowed !important; }
+  #ann2-iou-toggle.iou-active { background:rgba(239,68,68,0.22) !important; border-color:rgba(239,68,68,0.5) !important; color:#fca5a5 !important; }
 
   /* Shortcut badges */
   .ann2-shortcut-badge {

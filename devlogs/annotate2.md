@@ -100,3 +100,46 @@ Checkbox **Auto Annotate** kini bertindak sebagai pengatur mode eksekusi ketika 
 
 
 
+
+---
+
+## ?? 6. Threshold Conf & IoU di Settings Panel + Toggle IoU-Rejected
+
+### 6.1 Slider Conf & IoU di Settings Panel
+Panel **Auto Annotate Settings** kini memiliki dua slider di bagian paling atas (Detection Thresholds):
+- **Conf** (default: 25%) — Threshold minimum confidence score SAM. Semakin tinggi = semakin sedikit tapi lebih akurat.
+- **IoU** (default: 85%) — Threshold IoU deduplication. Anotasi baru yang overlap >= nilai ini dianggap duplikat.
+- Disimpan ke server dan dikirim ke API sam-auto-annotate (field conf) serta digunakan sebagai threshold client-side.
+
+### 6.2 Toggle IoU di Toolbar Header
+- Tombol **IoU** (merah) di sebelah tombol Settings. Klik untuk show/hide outline merah dari anotasi yang dibuang karena IoU duplikasi pada scan preview terakhir.
+
+---
+
+## ??? 7. Interaktif Review pada Scan Preview Mode (Unchecked)
+
+Setelah menekan **S** di mode Auto Annotate tanpa centang, hasil scan kini bisa diedit secara interaktif sebelum di-confirm dengan Enter.
+
+### 7.1 Hover & Seleksi
+- Hover: border putih. Klik: terseleksi (border kuning/amber), vertex dots muncul.
+
+### 7.2 Edit Vertex
+- Drag vertex -> pindahkan. Klik vertex (tanpa drag <4px) -> hapus vertex. Sisa <= 3 vertex = hapus seluruh anotasi.
+
+### 7.3 Geser Seluruh Anotasi
+- Klik & drag di dalam polygon (bukan vertex) -> geser seluruh anotasi.
+
+### 7.4 Hapus Anotasi
+- Delete/Backspace saat anotasi terseleksi -> hapus dari preview.
+
+### 7.5 Simplify Slider (RDP)
+- Panel Simplify (kanan atas, di bawah shortcut badges) muncul saat anotasi dipilih.
+- Slider 1-100% menggunakan Ramer-Douglas-Peucker untuk reduksi vertex real-time.
+- Tombol Apply hanya aktif jika slider tidak di 100%. Apply -> commit simplified, reset slider.
+
+| Shortcut | Aksi |
+|----------|------|
+| S | Scan image |
+| Enter | Confirm & simpan preview |
+| Esc | Deseleksi / Batalkan scan |
+| Del/Backspace | Hapus anotasi preview terseleksi |

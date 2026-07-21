@@ -23,10 +23,18 @@
 
   // Auto Annotate state
   let _autoAnnotateActive = false;
-  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [] };
+  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [], conf: 0.25, iou: 0.85 };
   let _autoProcessing = false;
   let _autoApprovedTags = [];  // local editable copy for panel
   let _tempAutoAnns = [];      // temporary scan-only polygons for preview
+  let _tempAnnHoverIdx = -1;   // hover index into _tempAutoAnns
+  let _tempAnnSelIdx = -1;     // selected index into _tempAutoAnns
+  let _tempAnnDragVertex = -1; // vertex index being dragged in selected temp ann (-1 = none)
+  let _tempAnnDragVertStart = null;  // {x,y} image coords at drag start
+  let _iouRejectedAnns = [];   // polygons rejected during last scan due to IoU
+  let _showIouRejected = false; // whether to display iou-rejected outlines
+  let _simplifyDirty = false;   // whether simplify slider has been moved from 100
+  let _tempAnnOrigPts = null;   // original points of selected temp ann before simplify preview
   let _settingsDirty = false;
   let _settingsSnapshot = null;  // deep clone at time of open, for cancel-revert
 
@@ -312,12 +320,23 @@
       if (k === 'Escape') {
         if (_tool === 'polygon') _cancelPoly();
         if (_tool === 'magic') _cancelMagic();
-        if (_tool === 'autoann' && _tempAutoAnns.length > 0) { _clearTempAutoAnns(); }
+        if (_tool === 'autoann' && _tempAutoAnns.length > 0) {
+          if (_tempAnnSelIdx >= 0) {
+            _tempAnnSelIdx = -1; _hideSimplifypanel(); _redraw(); return;
+          }
+          _clearTempAutoAnns();
+        }
         _selIdx = -1; _redraw(); _renderAnnList();
       }
       // Auto Annotate shortcuts
       if (_tool === 'autoann' && !_autoProcessing) {
         if (k === 's' || k === 'S') { e.preventDefault(); ann2StartAutoAnnotate(); }
+      }
+      // Delete selected temp ann in review mode
+      if ((k === 'Delete' || k === 'Backspace') && _tool === 'autoann' && _tempAnnSelIdx >= 0) {
+        _tempAutoAnns.splice(_tempAnnSelIdx, 1);
+        _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
+        _hideSimplifypanel(); _redraw(); return;
       }
       if ((k === 'Delete' || k === 'Backspace') && _selIdx >= 0 && !_anns[_selIdx]?.locked) {
         _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList();
@@ -457,6 +476,28 @@
     return inside;
   }
 
+  // Hit test for temp auto anns (returns index or -1)
+  function _hitTempAnn(ix, iy) {
+    if (!_tempAutoAnns.length) return -1;
+    for (let i = _tempAutoAnns.length - 1; i >= 0; i--) {
+      const ann = _tempAutoAnns[i];
+      if (_ptInPoly(ix, iy, ann.points)) return i;
+    }
+    return -1;
+  }
+
+  // Hit test for a vertex of a temp ann (returns vertex index or -1)
+  // cx, cy are canvas coords
+  function _hitTempVertex(cx, cy, ann) {
+    if (!ann || ann.type === 'bbox') return -1;
+    for (let i = 0; i < ann.points.length; i++) {
+      const c = _i2c(ann.points[i][0], ann.points[i][1]);
+      const dx = cx - c.x, dy = cy - c.y;
+      if (dx * dx + dy * dy <= 64) return i;
+    }
+    return -1;
+  }
+
   // ── Mouse Handlers ──
   function _onDown(e) {
     const rect = e.target.getBoundingClientRect();
@@ -469,6 +510,43 @@
       e.target.style.cursor = 'grabbing'; return;
     }
     if (e.button !== 0) return;
+
+    // Autoann review mode: interact with temp annotations
+    if (_tool === 'autoann' && _tempAutoAnns.length > 0 && !_autoProcessing) {
+      // First check if clicking on a vertex of selected ann
+      if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+        const vi = _hitTempVertex(cx, cy, _tempAutoAnns[_tempAnnSelIdx]);
+        if (vi >= 0) {
+          // Start vertex drag — mouseup decides delete vs. move
+          _tempAnnDragVertex = vi;
+          _tempAnnDragVertStart = { cx, cy, ix: ip.x, iy: ip.y };
+          return;
+        }
+        // Click inside selected ann: start whole-annotation drag
+        const ti2 = _hitTempAnn(ip.x, ip.y);
+        if (ti2 === _tempAnnSelIdx) {
+          _tempAnnDragVertex = -1;
+          _tempAnnDragVertStart = { cx, cy, ix: ip.x, iy: ip.y, wholeAnn: true,
+            origPts: _tempAutoAnns[_tempAnnSelIdx].points.map(p => [...p]) };
+          return;
+        }
+      }
+      // Hit test on temp anns
+      const ti = _hitTempAnn(ip.x, ip.y);
+      if (ti >= 0) {
+        _tempAnnSelIdx = ti;
+        _tempAnnHoverIdx = -1;
+        _showSimplifyPanel();
+        _redraw();
+        return;
+      } else {
+        // Click on empty: deselect
+        _tempAnnSelIdx = -1;
+        _hideSimplifypanel();
+        _redraw();
+        return;
+      }
+    }
 
     if (_tool === 'drag') {
       _panning = true; _panStart = { mx: cx, my: cy, px: _pan.x, py: _pan.y };
@@ -572,6 +650,36 @@
     const ip = _c2i(cx, cy);
     _mouseImg = ip;
 
+    // Autoann review mode: hover / vertex drag / whole-ann drag
+    if (_tool === 'autoann' && _tempAutoAnns.length > 0 && !_autoProcessing) {
+      if (_tempAnnDragVertStart) {
+        const ann = _tempAutoAnns[_tempAnnSelIdx];
+        if (ann) {
+          if (_tempAnnDragVertStart.wholeAnn) {
+            // Whole annotation drag
+            const dx = ip.x - _tempAnnDragVertStart.ix;
+            const dy = ip.y - _tempAnnDragVertStart.iy;
+            ann.points = _tempAnnDragVertStart.origPts.map(p => [_clp(p[0] + dx), _clp(p[1] + dy)]);
+          } else if (_tempAnnDragVertex >= 0) {
+            // Single vertex drag
+            ann.points[_tempAnnDragVertex] = [_clp(ip.x), _clp(ip.y)];
+          }
+          _redraw();
+        }
+        return;
+      }
+      // Hover detection
+      if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+        const vi = _hitTempVertex(cx, cy, _tempAutoAnns[_tempAnnSelIdx]);
+        e.target.style.cursor = vi >= 0 ? 'pointer' : 'move';
+      } else {
+        const ti = _hitTempAnn(ip.x, ip.y);
+        _tempAnnHoverIdx = ti;
+        e.target.style.cursor = ti >= 0 ? 'pointer' : 'crosshair';
+      }
+      if (!_panning) { _redraw(); return; }
+    }
+
     if (!_panning && _dragCorner === -1 && !_dragAnn && !_drawing) {
       _hoverIdx = _hitTest(ip.x, ip.y);
     }
@@ -617,6 +725,31 @@
   }
 
   function _onUp(e) {
+    // Temp ann drag vertex / whole-ann drag
+    if (_tempAnnDragVertStart) {
+      const rect = e.target.getBoundingClientRect();
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const dxPx = cx - _tempAnnDragVertStart.cx, dyPx = cy - _tempAnnDragVertStart.cy;
+      const moved = dxPx * dxPx + dyPx * dyPx > 16; // >4px = drag
+      if (!moved && !_tempAnnDragVertStart.wholeAnn && _tempAnnDragVertex >= 0) {
+        // It was a click: delete the vertex
+        const ann = _tempAutoAnns[_tempAnnSelIdx];
+        if (ann) {
+          if (ann.points.length <= 3) {
+            _tempAutoAnns.splice(_tempAnnSelIdx, 1);
+            _tempAnnSelIdx = -1;
+            _tempAnnHoverIdx = -1;
+            _hideSimplifypanel();
+          } else {
+            ann.points.splice(_tempAnnDragVertex, 1);
+          }
+          _redraw();
+        }
+      }
+      _tempAnnDragVertex = -1;
+      _tempAnnDragVertStart = null;
+      return;
+    }
     if (_panning) { _panning = false; e.target.style.cursor = 'grab'; return; }
     if (_dragCorner >= 0) { _dragCorner = -1; _dragCornerOrig = null; return; }
     if (_dragAnn) { _dragAnn = false; _dragAnnStart = null; _dragAnnOrig = null; return; }
@@ -636,7 +769,8 @@
 
   function _onLeave(e) {
     if (_panning) { _panning = false; e.target.style.cursor = _tool === 'drag' ? 'grab' : 'crosshair'; }
-    _mouseImg = null; _hoverIdx = -1; if (_drawing || _tool === 'edit' || _tool === 'magic') _redraw();
+    _mouseImg = null; _hoverIdx = -1; _tempAnnHoverIdx = -1;
+    if (_drawing || _tool === 'edit' || _tool === 'magic' || (_tool === 'autoann' && _tempAutoAnns.length > 0)) _redraw();
   }
 
   function _onDbl() { if (_tool === 'polygon' && _polyPts.length >= 3) _closePoly(); }
@@ -860,12 +994,24 @@
 
     // Draw temporary auto-annotate preview polygons (Unchecked mode)
     if (_tempAutoAnns && _tempAutoAnns.length > 0) {
-      _tempAutoAnns.forEach(ann => {
+      _tempAutoAnns.forEach((ann, tidx) => {
         const col = _clsColor(ann.class_id);
+        const isSel = tidx === _tempAnnSelIdx;
+        const isHover = tidx === _tempAnnHoverIdx && !isSel;
         ctx.save();
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 4]); // dashed line for preview status
+        if (isSel) {
+          ctx.strokeStyle = '#f59e0b'; // amber for selected
+          ctx.lineWidth = 2.5;
+          ctx.setLineDash([]);
+        } else if (isHover) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
+        } else {
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 4]);
+        }
         ctx.beginPath();
         ann.points.forEach((p, pi) => {
           const c = _i2c(p[0], p[1]);
@@ -873,7 +1019,44 @@
         });
         ctx.closePath();
         ctx.stroke();
-        ctx.fillStyle = col + '1a'; // very light fill
+        ctx.fillStyle = isSel ? 'rgba(245,158,11,0.18)' : (col + '1a');
+        ctx.fill();
+        ctx.restore();
+
+        // Draw vertex dots for selected annotation
+        if (isSel && ann.type === 'polygon') {
+          ann.points.forEach((p, vi) => {
+            const c = _i2c(p[0], p[1]);
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#f59e0b';
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([]);
+            ctx.stroke();
+            ctx.restore();
+          });
+        }
+      });
+    }
+
+    // Draw IoU-rejected annotations as translucent red outlines
+    if (_showIouRejected && _iouRejectedAnns && _iouRejectedAnns.length > 0) {
+      _iouRejectedAnns.forEach(ann => {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(239,68,68,0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ann.points.forEach((p, pi) => {
+          const c = _i2c(p[0], p[1]);
+          pi === 0 ? ctx.moveTo(c.x, c.y) : ctx.lineTo(c.x, c.y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(239,68,68,0.07)';
         ctx.fill();
         ctx.restore();
       });
@@ -1280,7 +1463,8 @@
         hints.innerHTML = `
           <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan Image</div>
           <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm Scan</div>
-          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel Scan</div>
+          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel / Deselect</div>
+          <div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete ann</div>
         `;
       }
     } else {
@@ -1305,6 +1489,16 @@
   }
 
   function _renderAutoSettingsPanel() {
+    // Conf & IoU sliders
+    const confSlider = document.getElementById('ann2-conf-slider');
+    const confVal = document.getElementById('ann2-conf-val');
+    const iouSlider = document.getElementById('ann2-iou-slider');
+    const iouVal = document.getElementById('ann2-iou-val');
+    const confPct = Math.round((_autoAnnotateSettings.conf || 0.25) * 100);
+    const iouPct = Math.round((_autoAnnotateSettings.iou || 0.85) * 100);
+    if (confSlider) { confSlider.value = confPct; if (confVal) confVal.textContent = confPct + '%'; }
+    if (iouSlider)  { iouSlider.value  = iouPct;  if (iouVal)  iouVal.textContent  = iouPct  + '%'; }
+
     // Model
     const modelSel = document.getElementById('ann2-auto-model');
     if (modelSel) modelSel.value = _autoAnnotateSettings.model || 'sam3.1';
@@ -1471,8 +1665,10 @@
     });
 
     const model = document.getElementById('ann2-auto-model')?.value || 'sam3.1';
+    const conf = parseFloat(document.getElementById('ann2-conf-slider')?.value || 25) / 100;
+    const iou  = parseFloat(document.getElementById('ann2-iou-slider')?.value  || 85) / 100;
 
-    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags] };
+    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou };
 
     try {
       await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
@@ -1557,7 +1753,8 @@
         body: JSON.stringify({
           filename: imgObj.filename,
           model: _autoAnnotateSettings.model,
-          prompts: _autoAnnotateSettings.prompts
+          prompts: _autoAnnotateSettings.prompts,
+          conf: _autoAnnotateSettings.conf || 0.25
         })
       });
       const data = await resp.json();
@@ -1572,8 +1769,9 @@
                 const existPoly = existing.type === 'bbox'
                   ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
                   : existing.points;
+                const iouThreshold = _autoAnnotateSettings.iou || 0.85;
                 const iou = _polygonIoU(newAnn.points, existPoly);
-                if (iou > 0.85) { isDup = true; break; }
+                if (iou > iouThreshold) { isDup = true; break; }
               }
             }
             if (!isDup) {
@@ -1595,12 +1793,29 @@
           await ann2ApproveAutoAnnotate();
         } else {
           // Unchecked mode: store as temporary preview polygons
-          _tempAutoAnns = data.annotations.map(newAnn => ({
+          // Also filter against existing annotations and track IoU-rejected
+          _iouRejectedAnns = [];
+          const iouThreshold = _autoAnnotateSettings.iou || 0.85;
+          _tempAutoAnns = data.annotations.filter(newAnn => {
+            for (const existing of _anns) {
+              if (existing.type === 'polygon' || existing.type === 'bbox') {
+                const existPoly = existing.type === 'bbox'
+                  ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+                  : existing.points;
+                if (_polygonIoU(newAnn.points, existPoly) > iouThreshold) {
+                  _iouRejectedAnns.push({ class_id: newAnn.class_id, points: newAnn.points.map(p => [...p]), type: 'polygon' });
+                  return false;
+                }
+              }
+            }
+            return true;
+          }).map(newAnn => ({
             class_id: newAnn.class_id,
             points: newAnn.points.map(p => [...p]),
             type: 'polygon'
           }));
-          if (window.toast) toast(`Scanned: ${_tempAutoAnns.length} objects. Press Enter to confirm, Esc to cancel`);
+          _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
+          if (window.toast) toast(`Scanned: ${_tempAutoAnns.length} obj${_iouRejectedAnns.length ? ` (${_iouRejectedAnns.length} IoU dup)` : ''}. Enter = confirm, Esc = cancel`);
           _redraw();
         }
       } else {
@@ -1690,8 +1905,114 @@
   function _clearTempAutoAnns() {
     if (!_tempAutoAnns || _tempAutoAnns.length === 0) return;
     _tempAutoAnns = [];
+    _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
+    _iouRejectedAnns = [];
+    _hideSimplifypanel();
     _redraw();
     if (window.toast) toast('Scan cancelled');
   }
+
+  // ── Simplify Polygon (Ramer-Douglas-Peucker) ──
+  function _rdpReduce(pts, eps) {
+    if (pts.length <= 2) return pts;
+    let dmax = 0, idx = 0;
+    const end = pts.length - 1;
+    for (let i = 1; i < end; i++) {
+      // perpendicular distance from pts[i] to line pts[0]..pts[end]
+      const x0 = pts[0][0], y0 = pts[0][1], x1 = pts[end][0], y1 = pts[end][1];
+      const xi = pts[i][0], yi = pts[i][1];
+      const dx = x1 - x0, dy = y1 - y0;
+      const len = Math.sqrt(dx*dx + dy*dy);
+      const d = len > 0 ? Math.abs(dy*xi - dx*yi + x1*y0 - y1*x0) / len : Math.sqrt((xi-x0)**2+(yi-y0)**2);
+      if (d > dmax) { dmax = d; idx = i; }
+    }
+    if (dmax > eps) {
+      const r1 = _rdpReduce(pts.slice(0, idx + 1), eps);
+      const r2 = _rdpReduce(pts.slice(idx), eps);
+      return [...r1.slice(0, -1), ...r2];
+    }
+    return [pts[0], pts[end]];
+  }
+
+  function _simplifyPolygon(pts, pct) {
+    // pct: 0..100, 100 = original, 1 = very simplified
+    if (!pts || pts.length < 4) return pts;
+    const maxEps = 0.05; // max epsilon in normalised coords
+    const eps = maxEps * (1 - pct / 100);
+    if (eps <= 0) return pts;
+    const closed = [...pts, pts[0]];
+    const reduced = _rdpReduce(closed, eps);
+    const result = reduced.slice(0, -1);
+    return result.length >= 3 ? result : pts.slice(0, 3);
+  }
+
+  // ── Simplify Panel ──
+  function _showSimplifyPanel() {
+    const panel = document.getElementById('ann2-simplify-panel');
+    if (!panel) return;
+    // Position: right below hints bar
+    panel.style.display = 'flex';
+    const slider = document.getElementById('ann2-simplify-slider');
+    const valEl = document.getElementById('ann2-simplify-val');
+    const applyBtn = document.getElementById('ann2-simplify-apply');
+    if (slider) slider.value = 100;
+    if (valEl) valEl.textContent = '100%';
+    if (applyBtn) { applyBtn.disabled = true; }
+    _simplifyDirty = false;
+    // Store original points for reset
+    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+      _tempAnnOrigPts = _tempAutoAnns[_tempAnnSelIdx].points.map(p => [...p]);
+    }
+  }
+
+  function _hideSimplifypanel() {
+    const panel = document.getElementById('ann2-simplify-panel');
+    if (panel) panel.style.display = 'none';
+    _simplifyDirty = false;
+    _tempAnnOrigPts = null;
+  }
+
+  window.ann2OnSimplifySlider = function (val) {
+    const valEl = document.getElementById('ann2-simplify-val');
+    if (valEl) valEl.textContent = val + '%';
+    const applyBtn = document.getElementById('ann2-simplify-apply');
+    const isDirty = parseInt(val) !== 100;
+    if (applyBtn) { applyBtn.disabled = !isDirty; }
+    _simplifyDirty = isDirty;
+    // Live preview: apply simplification to temp display
+    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx] && _tempAnnOrigPts) {
+      const pct = parseInt(val);
+      _tempAutoAnns[_tempAnnSelIdx].points = pct === 100
+        ? _tempAnnOrigPts.map(p => [...p])
+        : _simplifyPolygon(_tempAnnOrigPts, pct);
+      _redraw();
+    }
+  };
+
+  window.ann2ApplySimplify = function () {
+    const applyBtn = document.getElementById('ann2-simplify-apply');
+    if (applyBtn?.disabled) return;
+    // Commit simplified points as the new original
+    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+      _tempAnnOrigPts = _tempAutoAnns[_tempAnnSelIdx].points.map(p => [...p]);
+    }
+    // Reset slider
+    const slider = document.getElementById('ann2-simplify-slider');
+    const valEl = document.getElementById('ann2-simplify-val');
+    if (slider) slider.value = 100;
+    if (valEl) valEl.textContent = '100%';
+    if (applyBtn) applyBtn.disabled = true;
+    _simplifyDirty = false;
+    if (window.toast) toast('Simplify applied ✓');
+  };
+
+  // ── IoU Rejected Toggle ──
+  window.ann2ToggleIouRejected = function () {
+    _showIouRejected = !_showIouRejected;
+    const btn = document.getElementById('ann2-iou-toggle');
+    if (btn) btn.classList.toggle('iou-active', _showIouRejected);
+    _redraw();
+    if (window.toast) toast(_showIouRejected ? `Showing ${_iouRejectedAnns.length} IoU-rejected outlines` : 'IoU overlay hidden');
+  };
 
 })();
