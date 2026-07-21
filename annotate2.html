@@ -188,60 +188,70 @@
   </div>
 </div>
 
-<!-- Auto Annotate Settings Popup Modal -->
-<div id="ann2-auto-settings-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); z-index:10000; align-items:center; justify-content:center;">
-  <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:12px; box-shadow:0 16px 40px rgba(0,0,0,0.6); width:540px; max-width:92vw; max-height:85vh; display:flex; flex-direction:column; overflow:hidden; animation: ann2-popin 0.2s ease-out;">
-    
-    <!-- Modal Header -->
-    <div style="padding:14px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,0.02);">
-      <div style="display:flex; align-items:center; gap:8px; font-weight:600; font-size:.95rem; color:#c4b5fd;">
-        <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:#a855f7">
-          <path d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
-        </svg>
-        Auto Annotate Settings
-      </div>
-      <button onclick="ann2CloseAutoSettingsModal()" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.2rem; line-height:1; padding:4px;">✕</button>
+<!-- Auto Annotate Settings — Floating Always-Visible Draggable Panel -->
+<div id="ann2-auto-settings-modal" style="display:none; position:fixed; right:66px; top:80px; z-index:9000; width:420px; max-width:calc(100vw - 80px); max-height:calc(100vh - 100px); background:var(--bg-secondary); border:1px solid rgba(168,85,247,0.35); border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(168,85,247,0.1); flex-direction:column; overflow:hidden; animation: ann2-popin 0.18s ease-out; user-select:none;">
+
+  <!-- Drag Handle Header -->
+  <div id="ann2-auto-settings-header"
+    style="padding:10px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; background:rgba(168,85,247,0.08); cursor:grab; flex-shrink:0;"
+    onmousedown="ann2StartSettingsDrag(event)">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <!-- drag grip dots -->
+      <svg viewBox="0 0 10 16" style="width:9px;height:14px;fill:rgba(168,85,247,0.5);flex-shrink:0;" title="Drag to move">
+        <circle cx="2.5" cy="2.5" r="1.5"/><circle cx="7.5" cy="2.5" r="1.5"/>
+        <circle cx="2.5" cy="6.5" r="1.5"/><circle cx="7.5" cy="6.5" r="1.5"/>
+        <circle cx="2.5" cy="10.5" r="1.5"/><circle cx="7.5" cy="10.5" r="1.5"/>
+        <circle cx="2.5" cy="14.5" r="1.5"/><circle cx="7.5" cy="14.5" r="1.5"/>
+      </svg>
+      <svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:#a855f7;flex-shrink:0">
+        <path d="M7.5,5.6L10,7L8.6,4.5L10,2L7.5,3.4L5,2L6.4,4.5L5,7L7.5,5.6M19.5,15.4L17,14L18.4,16.5L17,19L19.5,17.6L22,19L20.6,16.5L22,14L19.5,15.4M22,2L20.6,4.5L22,7L19.5,5.6L17,7L18.4,4.5L17,2L19.5,3.4L22,2M13.34,12.78L15.78,10.34L13.66,8.22L11.22,10.66L13.34,12.78M14.37,7.29L16.71,9.63C17.1,10 17.1,10.65 16.71,11.04L5.04,22.71C4.65,23.1 4,23.1 3.63,22.71L1.29,20.37C0.9,20 0.9,19.35 1.29,18.96L12.96,7.29C13.35,6.9 14,6.9 14.37,7.29Z" />
+      </svg>
+      <span style="font-weight:600; font-size:.88rem; color:#c4b5fd; letter-spacing:.01em;">Auto Annotate Settings</span>
+    </div>
+    <button onclick="ann2CloseAutoSettingsModal()" title="Tutup"
+      style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem; line-height:1; padding:4px; border-radius:5px; transition: color .15s; flex-shrink:0;"
+      onmouseenter="this.style.color='#fff'" onmouseleave="this.style.color='var(--text-muted)'">✕</button>
+  </div>
+
+  <!-- Panel Body -->
+  <div style="padding:14px 16px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; flex:1; min-height:0;">
+
+    <!-- Model selection -->
+    <div style="display:flex; flex-direction:column; gap:5px;">
+      <label style="font-size:.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Model</label>
+      <select id="ann2-auto-model" onchange="ann2MarkSettingsDirty()" style="padding:7px 10px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:7px; color:var(--text-primary); font-family:inherit; font-size:.83rem; cursor:pointer;">
+        <option value="sam3">SAM 3</option>
+        <option value="sam3.1" selected>SAM 3.1</option>
+      </select>
     </div>
 
-    <!-- Modal Body -->
-    <div style="padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:16px;">
-      
-      <!-- Model selection -->
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Model</label>
-        <select id="ann2-auto-model" style="padding:8px 12px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; color:var(--text-primary); font-family:inherit; font-size:.85rem; cursor:pointer;">
-          <option value="sam3">SAM 3</option>
-          <option value="sam3.1" selected>SAM 3.1</option>
-        </select>
+    <!-- Prompts & Class Mapping -->
+    <div style="display:flex; flex-direction:column; gap:5px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <label style="font-size:.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Prompts & Class</label>
+        <button class="btn btn-ghost" onclick="ann2AddPromptRow()" style="font-size:.74rem; padding:2px 9px;">+ Add</button>
       </div>
-
-      <!-- Prompts & Class Mapping -->
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">Prompts & Class Mapping</label>
-          <button class="btn btn-ghost" onclick="ann2AddPromptRow()" style="font-size:.76rem; padding:3px 10px;">+ Add Prompt</button>
-        </div>
-        <div id="ann2-auto-prompts" style="display:flex; flex-direction:column; gap:8px;"></div>
-      </div>
-
-      <!-- On Approved Add Tags -->
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <label style="font-size:.74rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">On Approved Add Tags</label>
-        <div id="ann2-auto-tags-area" style="display:flex; flex-wrap:wrap; gap:6px; min-height:32px; padding:4px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px;"></div>
-        <select id="ann2-auto-tag-sel" onchange="ann2AddAutoTag(this)" style="padding:7px 10px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:8px; color:var(--text-primary); font-family:inherit; font-size:.82rem; cursor:pointer;">
-          <option value="">+ Tambah tag...</option>
-        </select>
-      </div>
-
+      <div id="ann2-auto-prompts" style="display:flex; flex-direction:column; gap:7px;"></div>
     </div>
 
-    <!-- Modal Footer -->
-    <div style="padding:12px 18px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; background:rgba(0,0,0,0.15);">
-      <button class="btn btn-ghost" onclick="ann2CloseAutoSettingsModal()" style="padding:6px 16px; font-size:.82rem;">Cancel</button>
-      <button class="btn btn-accent" onclick="ann2SaveAutoSettings()" style="padding:6px 20px; font-size:.82rem; background:linear-gradient(135deg, #a855f7, #7c3aed); border:none;">Save Settings</button>
+    <!-- On Approved Add Tags -->
+    <div style="display:flex; flex-direction:column; gap:5px;">
+      <label style="font-size:.72rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em;">On Approve: Add Tags</label>
+      <div id="ann2-auto-tags-area" style="display:flex; flex-wrap:wrap; gap:5px; min-height:28px; padding:4px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:7px;"></div>
+      <select id="ann2-auto-tag-sel" onchange="ann2AddAutoTag(this)" style="padding:6px 10px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:7px; color:var(--text-primary); font-family:inherit; font-size:.8rem; cursor:pointer;">
+        <option value="">+ Tambah tag...</option>
+      </select>
     </div>
 
   </div>
+
+  <!-- Panel Footer -->
+  <div style="padding:10px 14px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:7px; background:rgba(0,0,0,0.15); flex-shrink:0;">
+    <button class="btn btn-ghost" id="ann2-cancel-settings-btn" onclick="ann2CancelAutoSettings()" style="padding:5px 14px; font-size:.8rem;">Batalkan Perubahan</button>
+    <button class="btn btn-accent" id="ann2-save-settings-btn" onclick="ann2SaveAutoSettings()" disabled
+      style="padding:5px 16px; font-size:.8rem; background:linear-gradient(135deg, #a855f7, #7c3aed); border:none; opacity:0.4; cursor:not-allowed; transition: opacity .2s;">Simpan Settings</button>
+  </div>
+
 </div>
 
 <style>
@@ -265,6 +275,13 @@
     animation: ann2-spin 0.8s linear infinite;
   }
   @keyframes ann2-spin { to { transform: rotate(360deg); } }
+  @keyframes ann2-popin {
+    from { opacity: 0; transform: scale(0.94) translateY(-6px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+  #ann2-auto-settings-modal.is-dragging #ann2-auto-settings-header { cursor: grabbing; }
+  #ann2-save-settings-btn:not([disabled]) { opacity: 1 !important; cursor: pointer !important; }
+  #ann2-save-settings-btn[disabled]       { opacity: 0.38 !important; cursor: not-allowed !important; }
 
   /* Shortcut badges */
   .ann2-shortcut-badge {

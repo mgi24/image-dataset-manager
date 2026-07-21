@@ -25,6 +25,8 @@
   let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [] };
   let _autoProcessing = false;
   let _autoApprovedTags = [];  // local editable copy for panel
+  let _settingsDirty = false;
+  let _settingsSnapshot = null;  // deep clone at time of open, for cancel-revert
 
   // Canvas transform
   let _pan = { x: 0, y: 0 };
@@ -1023,16 +1025,64 @@
 
   // ── Auto Annotate ──
 
-  // Modal controls
+  // ── Settings dirty-tracking helpers ──
+  window.ann2MarkSettingsDirty = function () {
+    _settingsDirty = true;
+    const btn = document.getElementById('ann2-save-settings-btn');
+    if (btn) { btn.disabled = false; }
+  };
+
+  function _markSettingsClean() {
+    _settingsDirty = false;
+    const btn = document.getElementById('ann2-save-settings-btn');
+    if (btn) { btn.disabled = true; }
+  }
+
+  // ── Draggable floating panel ──
+  window.ann2StartSettingsDrag = function (e) {
+    // Ignore if click was on the close button
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    const panel = document.getElementById('ann2-auto-settings-modal');
+    if (!panel) return;
+    e.preventDefault();
+    panel.classList.add('is-dragging');
+    const startX = e.clientX - panel.offsetLeft;
+    const startY = e.clientY - panel.offsetTop;
+    // Once we start dragging, switch from right/top anchoring to left/top
+    panel.style.right = 'auto';
+    panel.style.left = panel.offsetLeft + 'px';
+    panel.style.top  = panel.offsetTop  + 'px';
+    function onMove(ev) {
+      let nx = ev.clientX - startX;
+      let ny = ev.clientY - startY;
+      // Keep within viewport
+      nx = Math.max(0, Math.min(nx, window.innerWidth  - panel.offsetWidth));
+      ny = Math.max(0, Math.min(ny, window.innerHeight - panel.offsetHeight));
+      panel.style.left = nx + 'px';
+      panel.style.top  = ny + 'px';
+    }
+    function onUp() {
+      panel.classList.remove('is-dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  };
+
+  // Panel controls
   window.ann2OpenAutoSettingsModal = function () {
-    const modal = document.getElementById('ann2-auto-settings-modal');
-    if (modal) modal.style.display = 'flex';
+    const panel = document.getElementById('ann2-auto-settings-modal');
+    if (!panel) return;
+    panel.style.display = 'flex';
+    // Snapshot current saved settings for cancel-revert
+    _settingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
     _loadAutoSettings();
   };
 
   window.ann2CloseAutoSettingsModal = function () {
-    const modal = document.getElementById('ann2-auto-settings-modal');
-    if (modal) modal.style.display = 'none';
+    const panel = document.getElementById('ann2-auto-settings-modal');
+    if (panel) panel.style.display = 'none';
   };
 
   // Toggle auto annotate mode
@@ -1060,6 +1110,9 @@
       }
     } catch (e) { console.error('Failed to load auto-annotate settings', e); }
     _renderAutoSettingsPanel();
+    // Freshly loaded from server = clean state
+    _settingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
+    _markSettingsClean();
   }
 
   function _renderAutoSettingsPanel() {
@@ -1141,6 +1194,7 @@
     input.type = 'text';
     input.value = promptText || '';
     input.placeholder = 'e.g. car, license plate...';
+    input.oninput = () => window.ann2MarkSettingsDirty && ann2MarkSettingsDirty();
 
     const clsSel = document.createElement('select');
     _populateClassOptions(clsSel, classId);
@@ -1148,6 +1202,8 @@
     clsSel.onchange = function () {
       if (this.value === '__add_new__') {
         _addNewClassPrompt(clsSel);
+      } else {
+        ann2MarkSettingsDirty();
       }
     };
 
@@ -1155,7 +1211,7 @@
     delBtn.className = 'ann2-prompt-del';
     delBtn.textContent = '×';
     delBtn.title = 'Remove';
-    delBtn.onclick = () => { row.remove(); };
+    delBtn.onclick = () => { row.remove(); ann2MarkSettingsDirty(); };
 
     row.append(input, clsSel, delBtn);
     container.appendChild(row);
@@ -1166,6 +1222,7 @@
     if (!container) return;
     const idx = container.children.length;
     _addPromptRowDOM(container, '', 0, idx);
+    ann2MarkSettingsDirty();
   };
 
   function _renderAutoTagsArea() {
@@ -1181,6 +1238,7 @@
       btn.onclick = () => {
         _autoApprovedTags = _autoApprovedTags.filter(t => t !== tag);
         _renderAutoTagsArea();
+        ann2MarkSettingsDirty();
       };
       chip.appendChild(btn);
       area.appendChild(chip);
@@ -1205,6 +1263,7 @@
     if (val && !_autoApprovedTags.includes(val)) {
       _autoApprovedTags.push(val);
       _renderAutoTagsArea();
+      ann2MarkSettingsDirty();
     }
     sel.value = '';
   };
@@ -1232,15 +1291,24 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(_autoAnnotateSettings)
       });
-      if (window.toast) toast('Auto annotate settings saved ✓');
-      ann2CloseAutoSettingsModal();
+      // Update snapshot to match newly-saved state
+      _settingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
+      _markSettingsClean();
+      if (window.toast) toast('Settings disimpan ✓');
+      // Panel stays visible — no close
     } catch (e) {
-      if (window.toast) toast('Failed to save settings', 'err');
+      if (window.toast) toast('Gagal menyimpan settings', 'err');
     }
   };
 
   window.ann2CancelAutoSettings = function () {
-    ann2CloseAutoSettingsModal();
+    // Revert DOM to snapshotted state
+    if (_settingsSnapshot) {
+      _autoAnnotateSettings = JSON.parse(JSON.stringify(_settingsSnapshot));
+      _autoApprovedTags = [...(_settingsSnapshot.on_approved_tags || [])];
+      _renderAutoSettingsPanel();
+    }
+    _markSettingsClean();
   };
 
   // IoU computation (client-side)

@@ -1,17 +1,10 @@
-# System Update & Devlog Documentation Viewer (`/update`)
-
-Dokumen ini menjelaskan spesifikasi teknis, arsitektur, dan alur kerja dari modul **Devlog Viewer & System Update (`/update`)** pada aplikasi Vehicle Detection Dataset Manager.
+# Endpoint (`/update`)
 
 ---
 
 ## 🏛️ 1. Ringkasan Fitur `/update`
 
 - **GitHub Dark Mode UI**: Tampilan antarmuka bergaya GitHub Dark Theme (`#0d1117`, `#161b22`, `#30363d`) dengan sidebar navigasi untuk menjelajahi file dokumentasi `.md` di folder `devlogs/`.
-- **Dynamic File Loader**: Membaca secara otomatis seluruh dokumen `.md` yang ada di direktori `devlogs/` tanpa perlu mendaftarkannya secara manual.
-- **Client-Side Markdown Rendering**: Menggunakan **Marked.js** untuk memproses sintaks Markdown secara lengkap (headers, tables, code blocks, callouts, badges).
-- **Interactive Mermaid Node Renderer**: Mengidentifikasi blok kode ` ```mermaid ` dan merender diagram graf/flowchart secara otomatis menggunakan **Mermaid.js**.
-- **Vector High-Resolution Zoom & Pan Modal**: Modal zoom *fullscreen* interaktif dengan perenderan vektor langsung (sharp text/lines 100% tanpa pixelation/blur), dukungan scroll wheel zoom, drag pan 60 FPS, serta tombol reset/close (`Esc`).
-
 ---
 
 ## 📊 2. Diagram Alur Sistem (Flowchart)
