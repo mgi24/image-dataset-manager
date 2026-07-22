@@ -107,8 +107,8 @@ Checkbox **Auto Annotate** kini bertindak sebagai pengatur mode eksekusi ketika 
 
 ### 6.1 Slider Conf & IoU di Settings Panel
 Panel **Auto Annotate Settings** kini memiliki dua slider di bagian paling atas (Detection Thresholds):
-- **Conf** (default: 25%) ó Threshold minimum confidence score SAM. Semakin tinggi = semakin sedikit tapi lebih akurat.
-- **IoU** (default: 85%) ó Threshold IoU deduplication. Anotasi baru yang overlap >= nilai ini dianggap duplikat.
+- **Conf** (default: 25%) ÔøΩ Threshold minimum confidence score SAM. Semakin tinggi = semakin sedikit tapi lebih akurat.
+- **IoU** (default: 85%) ÔøΩ Threshold IoU deduplication. Anotasi baru yang overlap >= nilai ini dianggap duplikat.
 - Disimpan ke server dan dikirim ke API sam-auto-annotate (field conf) serta digunakan sebagai threshold client-side.
 
 ### 6.2 Toggle IoU di Toolbar Header
@@ -133,13 +133,37 @@ Setelah menekan **S** di mode Auto Annotate tanpa centang, hasil scan kini bisa 
 - Delete/Backspace saat anotasi terseleksi -> hapus dari preview.
 
 ### 7.5 Simplify Slider (RDP)
-- Panel Simplify (kanan atas, di bawah shortcut badges) muncul saat anotasi dipilih.
-- Slider 1-100% menggunakan Ramer-Douglas-Peucker untuk reduksi vertex real-time.
-- Tombol Apply hanya aktif jika slider tidak di 100%. Apply -> commit simplified, reset slider.
+- **Positioning**: Panel Simplify diletakkan di dalam container flex melayang di pojok kanan atas, sehingga posisinya selalu berada di bawah shortcut badges tanpa menindihnya.
+- **Cross-Tool Availability**: Panel Simplify otomatis muncul saat pengguna memilih polygon baik pada mode **Auto Annotate (Review)**, **Edit Mode**, maupun target penggantian **Magic Selection (Shift+Click)**.
+- **Auto-Hide & Rollback**: Panel akan otomatis disembunyikan ketika tidak ada polygon yang dipilih. Jika pengguna membatalkan pilihan (deselect), membatalkan mode, atau berpindah alat tanpa menekan tombol **Apply** (status dirty), sistem secara otomatis mengembalikan (rollback) koordinat vertex polygon ke keadaan semula sebelum slider diubah.
+- **Reduksi Real-Time**: Slider 1-100% menggunakan algoritma Ramer-Douglas-Peucker untuk reduksi vertex secara langsung. Tombol Apply hanya aktif jika slider tidak di 100%. Apply -> commit simplified, reset slider.
 
 | Shortcut | Aksi |
 |----------|------|
 | S | Scan image |
 | Enter | Confirm & simpan preview |
 | Esc | Deseleksi / Batalkan scan |
-| Del/Backspace | Hapus anotasi preview terseleksi |
+| Del/Backspace | Hapus anotasi/vertex preview terseleksi |
+| Ctrl+Z | Undo aksi terakhir |
+| Ctrl+Y / Ctrl+Shift+Z | Redo aksi |
+
+---
+
+## ‚Ü©Ô∏è 8. Sistem Undo & Redo (State Management)
+
+Untuk mempercepat koreksi kesalahan saat melabeli, fitur **Undo & Redo** telah ditambahkan dengan mekanisme pelacakan berbasis *state snapshot*:
+
+### 8.1 Cakupan Aksi (Supported Actions)
+Mendukung seluruh aksi modifikasi data anotasi:
+1. **Penambahan**: Membuat BBox, Polygon baru, mengonfirmasi Magic Selection, atau mengonfirmasi scan Auto Annotate.
+2. **Modifikasi**: Menggeser control points/vertex, memindahkan seluruh anotasi, atau mengubah class dari anotasi terpilih.
+3. **Penghapusan**: Menghapus anotasi menggunakan tombol sampah atau tombol `Del`/`Backspace` key.
+4. **Penyusunan Ulang**: Menggeser urutan layer anotasi menggunakan drag & drop pada list.
+
+### 8.2 Scope & Manajemen Memori
+- Stack Undo & Redo berjalan secara terisolasi per gambar.
+- Saat berpindah gambar (`Next` / `Prev` / memuat gambar lain), stack akan dikosongkan secara otomatis untuk menghindari pemborosan memori.
+
+### 8.3 Integrasi UI Shortcut
+- Informasi shortcut `Ctrl+Z` dan `Ctrl+Y` selalu ditampilkan pada panel shortcut di pojok kanan atas kanvas.
+- Badge shortcut akan meredup (`opacity: 0.4`) ketika stack kosong, dan menyala terang beserta indikator jumlah aksi (`Undo (3)`) ketika riwayat tersedia.

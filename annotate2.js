@@ -42,6 +42,15 @@
   let _pan = { x: 0, y: 0 };
   let _scale = 1;
 
+  // Undo/Redo state
+  let _undoStack = [];
+  let _redoStack = [];
+  let _beforeEditSnapshot = null;
+
+  // Selected vertex inside temporary auto-annotated preview
+  let _tempAnnSelectedVertex = -1;
+  let _activeSimplifyTargetKey = null;
+
   // Interaction state
   let _panning = false, _panStart = null;
   let _drawing = false, _drawStart = null;
@@ -156,6 +165,7 @@
     if (_tool === 'edit' && _selIdx >= 0 && _anns[_selIdx]) {
       if (!isNaN(cid) && !_anns[_selIdx].locked) {
         if (_anns[_selIdx].class_id !== cid) {
+          _pushUndoState();
           _anns[_selIdx].class_id = cid;
           _redraw();
           _renderAnnList();
@@ -224,6 +234,12 @@
   async function _loadImg(idx) {
     _idx = Math.max(0, Math.min(idx, _images.length - 1));
     _tempAutoAnns = [];
+    _tempAnnSelectedVertex = -1;
+    _activeSimplifyTargetKey = null;
+    _undoStack = [];
+    _redoStack = [];
+    _beforeEditSnapshot = null;
+    _updateShortcutHints();
     const imgObj = _images[_idx];
     _anns = (imgObj.annotations || []).map(a => ({
       class_id: a.class_id,
@@ -294,7 +310,9 @@
   function _setupKeys() {
     document.addEventListener('keydown', e => {
       const root = document.getElementById('ann2-root');
-      if (!root || root.closest('[style*="display:none"]')) return;
+      if (!root) return;
+      const page = document.getElementById('page-annotate2');
+      if (!page || page.style.display === 'none') return;
       const tag = e.target.tagName.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
 
@@ -306,11 +324,24 @@
       }
 
       const k = e.key;
+      const isZ = k.toLowerCase() === 'z' || e.code === 'KeyZ';
+      const isY = k.toLowerCase() === 'y' || e.code === 'KeyY';
+
       if (k === 'h' || k === 'H') _setTool('drag');
       if ((k === 'b' || k === 'B') && _datasetType !== 'segment') _setTool('bbox');
       if ((k === 'p' || k === 'P') && _datasetType !== 'object_detection') _setTool('polygon');
       if (k === 'e' || k === 'E') _setTool('edit');
       if (k === 'm' || k === 'M') _setTool('magic');
+      if ((e.ctrlKey || e.metaKey) && isZ) {
+        e.preventDefault();
+        _undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (isY || (e.shiftKey && isZ))) {
+        e.preventDefault();
+        _redo();
+        return;
+      }
       if (k === 'ArrowLeft') ann2Prev();
       if (k === 'ArrowRight') ann2Next();
       if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); ann2Save(); }
@@ -322,24 +353,44 @@
         if (_tool === 'magic') _cancelMagic();
         if (_tool === 'autoann' && _tempAutoAnns.length > 0) {
           if (_tempAnnSelIdx >= 0) {
-            _tempAnnSelIdx = -1; _hideSimplifypanel(); _redraw(); return;
+            _tempAnnSelIdx = -1;
+            _tempAnnSelectedVertex = -1;
+            _updateShortcutHints(); _redraw(); return;
           }
           _clearTempAutoAnns();
         }
-        _selIdx = -1; _redraw(); _renderAnnList();
+        _selIdx = -1; _redraw(); _renderAnnList(); _updateShortcutHints();
       }
       // Auto Annotate shortcuts
       if (_tool === 'autoann' && !_autoProcessing) {
         if (k === 's' || k === 'S') { e.preventDefault(); ann2StartAutoAnnotate(); }
       }
-      // Delete selected temp ann in review mode
+      // Delete selected temp ann or vertex in review mode
       if ((k === 'Delete' || k === 'Backspace') && _tool === 'autoann' && _tempAnnSelIdx >= 0) {
-        _tempAutoAnns.splice(_tempAnnSelIdx, 1);
-        _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
-        _hideSimplifypanel(); _redraw(); return;
+        const ann = _tempAutoAnns[_tempAnnSelIdx];
+        if (ann && _tempAnnSelectedVertex >= 0 && _tempAnnSelectedVertex < ann.points.length) {
+          if (ann.points.length <= 3) {
+            _tempAutoAnns.splice(_tempAnnSelIdx, 1);
+            _tempAnnSelIdx = -1;
+            _tempAnnHoverIdx = -1;
+            _tempAnnSelectedVertex = -1;
+          } else {
+            ann.points.splice(_tempAnnSelectedVertex, 1);
+            _tempAnnSelectedVertex = -1;
+          }
+          _redraw();
+          _updateShortcutHints();
+        } else {
+          _tempAutoAnns.splice(_tempAnnSelIdx, 1);
+          _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
+          _tempAnnSelectedVertex = -1;
+          _updateShortcutHints(); _redraw();
+        }
+        return;
       }
       if ((k === 'Delete' || k === 'Backspace') && _selIdx >= 0 && !_anns[_selIdx]?.locked) {
-        _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList();
+        _pushUndoState();
+        _anns.splice(_selIdx, 1); _selIdx = -1; _redraw(); _renderAnnList(); _updateShortcutHints();
       }
     });
 
@@ -371,7 +422,7 @@
     const btn = document.getElementById(`ann2-tool-${t}`);
     if (btn) btn.classList.add('active-tool');
     const c = document.getElementById('ann2-canvas');
-    if (c) c.style.cursor = t === 'drag' ? 'grab' : 'crosshair';
+    if (c) c.style.cursor = t === 'grab' ? 'grab' : 'crosshair';
 
     if (t === 'autoann') {
       const chk = document.getElementById('ann2-auto-annotate-chk');
@@ -379,42 +430,10 @@
         _autoAnnotateActive = chk.checked;
       }
       ann2OpenAutoSettingsModal();
+    } else {
+      ann2CloseAutoSettingsModal();
     }
-    if (typeof _updateAutoHints === 'function') _updateAutoHints();
-
-    const hint = document.getElementById('ann2-hint-text');
-    if (hint) {
-      if (t === 'polygon') {
-        hint.textContent = 'Enter = close selection · Esc = cancel';
-        hint.style.color = 'var(--accent-light)';
-        hint.style.fontSize = '.78rem';
-        hint.style.fontWeight = '600';
-      } else if (t === 'edit') {
-        hint.textContent = 'Click to select · Drag control points to edit';
-        hint.style.color = 'var(--accent-light)';
-        hint.style.fontSize = '.78rem';
-        hint.style.fontWeight = '600';
-      } else if (t === 'magic') {
-        hint.textContent = 'Click = positive · Ctrl+Click = negative · Shift+Click = select to replace · Enter = konfirmasi · Esc = batal';
-        hint.style.color = '#a78bfa';
-        hint.style.fontSize = '.78rem';
-        hint.style.fontWeight = '600';
-      } else if (t === 'autoann') {
-        if (_autoAnnotateActive) {
-          hint.textContent = 'S = Process (Loop & Next)';
-        } else {
-          hint.textContent = 'S = Scan · Enter = Confirm · Esc = Cancel';
-        }
-        hint.style.color = '#c4b5fd';
-        hint.style.fontSize = '.78rem';
-        hint.style.fontWeight = '600';
-      } else {
-        hint.textContent = 'Scroll = zoom · H = pan';
-        hint.style.color = 'var(--text-muted)';
-        hint.style.fontSize = '.7rem';
-        hint.style.fontWeight = 'normal';
-      }
-    }
+    _updateShortcutHints();
     _redraw();
   }
   window.ann2SetTool = _setTool;
@@ -517,9 +536,12 @@
       if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
         const vi = _hitTempVertex(cx, cy, _tempAutoAnns[_tempAnnSelIdx]);
         if (vi >= 0) {
-          // Start vertex drag — mouseup decides delete vs. move
+          // Start vertex drag
           _tempAnnDragVertex = vi;
           _tempAnnDragVertStart = { cx, cy, ix: ip.x, iy: ip.y };
+          _tempAnnSelectedVertex = vi;
+          _redraw();
+          _updateShortcutHints();
           return;
         }
         // Click inside selected ann: start whole-annotation drag
@@ -536,13 +558,15 @@
       if (ti >= 0) {
         _tempAnnSelIdx = ti;
         _tempAnnHoverIdx = -1;
-        _showSimplifyPanel();
+        _tempAnnSelectedVertex = -1;
+        _updateShortcutHints();
         _redraw();
         return;
       } else {
         // Click on empty: deselect
         _tempAnnSelIdx = -1;
-        _hideSimplifypanel();
+        _tempAnnSelectedVertex = -1;
+        _updateShortcutHints();
         _redraw();
         return;
       }
@@ -574,18 +598,14 @@
           _magicLoading = false;
           _redraw();
           _renderAnnList();
-          // Update hint text to show we're in replace mode
-          const hint = document.getElementById('ann2-hint-text');
-          if (hint) {
-            hint.textContent = '🔁 Replace mode — Click = positive · Ctrl+Click = negative · Enter = replace · Esc = cancel';
-            hint.style.color = '#fb923c';
-          }
+          _updateShortcutHints();
         } else {
           // Shift+Click on empty area: cancel replace mode
           _magicReplaceIdx = -1;
           _selIdx = -1;
           _redraw();
           _renderAnnList();
+          _updateShortcutHints();
         }
         return;
       }
@@ -606,7 +626,12 @@
     if (_tool === 'edit') {
       if (_selIdx >= 0 && _anns[_selIdx]) {
         const ci = _hitCorner(cx, cy, _anns[_selIdx]);
-        if (ci >= 0) { _dragCorner = ci; _dragCornerOrig = _anns[_selIdx].points.map(p => [...p]); return; }
+        if (ci >= 0) {
+          _dragCorner = ci;
+          _dragCornerOrig = _anns[_selIdx].points.map(p => [...p]);
+          _beforeEditSnapshot = JSON.parse(JSON.stringify(_anns));
+          return;
+        }
       }
       const hi = _hitTest(ip.x, ip.y);
       if (hi >= 0) {
@@ -616,10 +641,15 @@
           sel.value = _anns[hi].class_id;
           if (typeof _updateClassDotColor === 'function') _updateClassDotColor();
         }
-        if (!_anns[hi].locked) { _dragAnn = true; _dragAnnStart = { x: ip.x, y: ip.y }; _dragAnnOrig = _anns[hi].points.map(p => [...p]); }
-        _redraw(); _renderAnnList(); return;
+        if (!_anns[hi].locked) {
+          _dragAnn = true;
+          _dragAnnStart = { x: ip.x, y: ip.y };
+          _dragAnnOrig = _anns[hi].points.map(p => [...p]);
+          _beforeEditSnapshot = JSON.parse(JSON.stringify(_anns));
+        }
+        _redraw(); _renderAnnList(); _updateShortcutHints(); return;
       } else {
-        _selIdx = -1; _redraw(); _renderAnnList(); return;
+        _selIdx = -1; _redraw(); _renderAnnList(); _updateShortcutHints(); return;
       }
     }
 
@@ -731,39 +761,62 @@
       const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
       const dxPx = cx - _tempAnnDragVertStart.cx, dyPx = cy - _tempAnnDragVertStart.cy;
       const moved = dxPx * dxPx + dyPx * dyPx > 16; // >4px = drag
-      if (!moved && !_tempAnnDragVertStart.wholeAnn && _tempAnnDragVertex >= 0) {
-        // It was a click: delete the vertex
-        const ann = _tempAutoAnns[_tempAnnSelIdx];
-        if (ann) {
-          if (ann.points.length <= 3) {
-            _tempAutoAnns.splice(_tempAnnSelIdx, 1);
-            _tempAnnSelIdx = -1;
-            _tempAnnHoverIdx = -1;
-            _hideSimplifypanel();
-          } else {
-            ann.points.splice(_tempAnnDragVertex, 1);
-          }
-          _redraw();
+      if (moved) {
+        if (!_tempAnnDragVertStart.wholeAnn && _tempAnnDragVertex >= 0) {
+          _tempAnnSelectedVertex = _tempAnnDragVertex;
+        }
+      } else {
+        if (!_tempAnnDragVertStart.wholeAnn && _tempAnnDragVertex >= 0) {
+          _tempAnnSelectedVertex = _tempAnnDragVertex;
+        } else {
+          _tempAnnSelectedVertex = -1;
         }
       }
       _tempAnnDragVertex = -1;
       _tempAnnDragVertStart = null;
+      _redraw();
+      _updateShortcutHints();
       return;
     }
     if (_panning) { _panning = false; e.target.style.cursor = 'grab'; return; }
-    if (_dragCorner >= 0) { _dragCorner = -1; _dragCornerOrig = null; return; }
-    if (_dragAnn) { _dragAnn = false; _dragAnnStart = null; _dragAnnOrig = null; return; }
+    if (_dragCorner >= 0) {
+      if (_beforeEditSnapshot) {
+        const changed = JSON.stringify(_anns) !== JSON.stringify(_beforeEditSnapshot);
+        if (changed) {
+          _undoStack.push(_beforeEditSnapshot);
+          _redoStack = [];
+        }
+        _beforeEditSnapshot = null;
+      }
+      _dragCorner = -1; _dragCornerOrig = null;
+      _updateShortcutHints();
+      return;
+    }
+    if (_dragAnn) {
+      if (_beforeEditSnapshot) {
+        const changed = JSON.stringify(_anns) !== JSON.stringify(_beforeEditSnapshot);
+        if (changed) {
+          _undoStack.push(_beforeEditSnapshot);
+          _redoStack = [];
+        }
+        _beforeEditSnapshot = null;
+      }
+      _dragAnn = false; _dragAnnStart = null; _dragAnnOrig = null;
+      _updateShortcutHints();
+      return;
+    }
     if (_drawing && _tool === 'bbox' && _drawStart && _mouseImg) {
       const x1 = Math.min(_drawStart.x, _clp(_mouseImg.x)), y1 = Math.min(_drawStart.y, _clp(_mouseImg.y));
       const x2 = Math.max(_drawStart.x, _clp(_mouseImg.x)), y2 = Math.max(_drawStart.y, _clp(_mouseImg.y));
       if ((x2 - x1) > MIN_BBOX && (y2 - y1) > MIN_BBOX) {
         const cid = parseInt(document.getElementById('ann2-class-sel')?.value);
         if (!isNaN(cid) && _ds?.classes?.names[cid]) {
+          _pushUndoState();
           _anns.push({ class_id: cid, points: [[x1, y1], [x2, y2]], type: 'bbox', locked: false });
           _selIdx = _anns.length - 1; _renderAnnList();
         }
       }
-      _drawing = false; _drawStart = null; _redraw();
+      _drawing = false; _drawStart = null; _redraw(); _updateShortcutHints();
     }
   }
 
@@ -791,6 +844,7 @@
     if (_polyPts.length < 3) { _cancelPoly(); return; }
     const cid = parseInt(document.getElementById('ann2-class-sel')?.value);
     if (!isNaN(cid) && _ds?.classes?.names[cid]) {
+      _pushUndoState();
       _anns.push({ class_id: cid, points: _polyPts.map(p => [...p]), type: 'polygon', locked: false });
       _selIdx = _anns.length - 1; _renderAnnList();
     }
@@ -798,6 +852,7 @@
   }
   function _cancelPoly() {
     _drawing = false; _polyPts = [];
+    _updateShortcutHints();
     _redraw();
   }
 
@@ -807,6 +862,7 @@
     _magicPreview = null;
     _magicLoading = false;
     _magicReplaceIdx = -1;
+    _updateShortcutHints();
     _redraw();
   }
 
@@ -817,6 +873,7 @@
       if (window.toast) toast('Pilih class terlebih dahulu', 'err');
       return;
     }
+    _pushUndoState();
     const newAnn = { class_id: cid, points: _magicPreview.map(p => [p[0], p[1]]), type: 'polygon', locked: false };
     if (_magicReplaceIdx >= 0 && _magicReplaceIdx < _anns.length) {
       // Replace existing annotation
@@ -833,14 +890,9 @@
     _magicPts = [];
     _magicPreview = null;
     _magicLoading = false;
+    _updateShortcutHints();
     _redraw();
     if (_autosave) ann2Save();
-    // Restore magic mode hint text
-    const hint = document.getElementById('ann2-hint-text');
-    if (hint) {
-      hint.textContent = 'Click = positive · Ctrl+Click = negative · Shift+Click = select to replace · Enter = konfirmasi · Esc = batal';
-      hint.style.color = '#a78bfa';
-    }
   }
 
   async function _runMagicPredict() {
@@ -1029,7 +1081,11 @@
             const c = _i2c(p[0], p[1]);
             ctx.save();
             ctx.beginPath();
-            ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+            if (vi === _tempAnnSelectedVertex) {
+              ctx.rect(c.x - 5, c.y - 5, 10, 10);
+            } else {
+              ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+            }
             ctx.fillStyle = '#f59e0b';
             ctx.fill();
             ctx.strokeStyle = '#fff';
@@ -1216,10 +1272,12 @@
         const currentItems = [...list.querySelectorAll('.ann2-ann-item')];
         const toIdx = currentItems.indexOf(draggingItem);
         if (fromIdx !== toIdx && fromIdx >= 0 && toIdx >= 0) {
+          _pushUndoState();
           const [moved] = _anns.splice(fromIdx, 1);
           _anns.splice(toIdx, 0, moved);
           _selIdx = toIdx;
           _redraw();
+          _updateShortcutHints();
         }
       });
       item.addEventListener('dragend', () => {
@@ -1236,6 +1294,7 @@
         }
         _redraw();
         _renderAnnList();
+        _updateShortcutHints();
       };
 
       const dot = document.createElement('span');
@@ -1259,8 +1318,9 @@
       delBtn.innerHTML = '<svg viewBox="0 0 24 24" style="width:11px;height:11px;fill:currentColor"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>';
       delBtn.onclick = ev => {
         ev.stopPropagation(); if (ann.locked) return;
+        _pushUndoState();
         _anns.splice(idx, 1); if (_selIdx >= idx) _selIdx = Math.max(-1, _selIdx - 1);
-        _redraw(); _renderAnnList();
+        _redraw(); _renderAnnList(); _updateShortcutHints();
       };
       item.append(dot, typeEl, nameEl, lockBtn, delBtn);
       list.appendChild(item);
@@ -1434,42 +1494,133 @@
       if (_tool !== 'autoann') {
         _setTool('autoann');
       } else {
-        _updateAutoHints();
-        const hint = document.getElementById('ann2-hint-text');
-        if (hint) {
-          hint.textContent = 'S = Process (Loop & Next)';
-        }
+        _updateShortcutHints();
       }
       ann2OpenAutoSettingsModal();
     } else {
-      _updateAutoHints();
-      const hint = document.getElementById('ann2-hint-text');
-      if (hint && _tool === 'autoann') {
-        hint.textContent = 'S = Scan · Enter = Confirm · Esc = Cancel';
-      }
+      _updateShortcutHints();
     }
   };
 
-  function _updateAutoHints() {
-    const hints = document.getElementById('ann2-auto-hints');
+  function _updateShortcutHints() {
+    const hints = document.getElementById('ann2-shortcut-hints');
     if (!hints) return;
-    if (_tool === 'autoann') {
-      hints.style.display = 'flex';
+
+    let html = '';
+
+    // Tool-specific hints
+    if (_tool === 'drag') {
+      html += `
+        <div class="ann2-shortcut-badge"><kbd>Scroll</kbd> Zoom</div>
+        <div class="ann2-shortcut-badge"><kbd>H</kbd> / <kbd>Middle Drag</kbd> Pan</div>
+      `;
+    } else if (_tool === 'bbox') {
+      html += `
+        <div class="ann2-shortcut-badge"><kbd>Drag Mouse</kbd> Draw BBox</div>
+      `;
+    } else if (_tool === 'polygon') {
+      if (_drawing) {
+        html += `
+          <div class="ann2-shortcut-badge"><kbd>Left Click</kbd> Add Point</div>
+          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> / <kbd>DblClick</kbd> Confirm</div>
+          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> / <kbd>Right Click</kbd> Cancel</div>
+        `;
+      } else {
+        html += `
+          <div class="ann2-shortcut-badge"><kbd>Left Click</kbd> Start Polygon</div>
+        `;
+      }
+    } else if (_tool === 'edit') {
+      html += `
+        <div class="ann2-shortcut-badge"><kbd>Left Click</kbd> Select</div>
+        <div class="ann2-shortcut-badge"><kbd>Drag</kbd> Edit Vertex/Ann</div>
+      `;
+      if (_selIdx >= 0 && !_anns[_selIdx]?.locked) {
+        html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> / <kbd>Backspace</kbd> Delete Ann</div>`;
+      }
+    } else if (_tool === 'magic') {
+      html += `
+        <div class="ann2-shortcut-badge"><kbd>Left Click</kbd> Positive Point</div>
+        <div class="ann2-shortcut-badge"><kbd>Ctrl+Click</kbd> Negative Point</div>
+        <div class="ann2-shortcut-badge"><kbd>Shift+Click</kbd> Replace Ann</div>
+      `;
+      if (_magicPreview && _magicPreview.length >= 3) {
+        html += `
+          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm</div>
+          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel</div>
+        `;
+      }
+    } else if (_tool === 'autoann') {
       if (_autoAnnotateActive) {
-        hints.innerHTML = `
+        html += `
           <div class="ann2-shortcut-badge"><kbd>S</kbd> Process &amp; Next (Loop)</div>
         `;
       } else {
-        hints.innerHTML = `
-          <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan Image</div>
-          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm Scan</div>
-          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel / Deselect</div>
-          <div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete ann</div>
-        `;
+        if (_tempAutoAnns && _tempAutoAnns.length > 0) {
+          html += `
+            <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm Scan</div>
+            <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel Scan</div>
+          `;
+          if (_tempAnnSelIdx >= 0) {
+            if (_tempAnnSelectedVertex >= 0) {
+              html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Vertex</div>`;
+            } else {
+              html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Ann</div>`;
+            }
+          }
+        } else {
+          html += `
+            <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan Image</div>
+          `;
+        }
       }
-    } else {
-      hints.style.display = 'none';
     }
+
+    // Global navigation and actions
+    const undoCount = _undoStack.length;
+    const redoCount = _redoStack.length;
+    html += `
+      <div style="width:100%;height:1px;background:var(--border);margin:4px 0;"></div>
+      <div class="ann2-shortcut-badge"><kbd>A</kbd> / <kbd>←</kbd> Prev Image</div>
+      <div class="ann2-shortcut-badge"><kbd>D</kbd> / <kbd>→</kbd> Next Image</div>
+      <div class="ann2-shortcut-badge"><kbd>Ctrl+S</kbd> Save</div>
+      <div class="ann2-shortcut-badge" style="opacity:${undoCount > 0 ? 1 : 0.4};"><kbd>Ctrl+Z</kbd> Undo${undoCount > 0 ? ` (${undoCount})` : ''}</div>
+      <div class="ann2-shortcut-badge" style="opacity:${redoCount > 0 ? 1 : 0.4};"><kbd>Ctrl+Y</kbd> Redo${redoCount > 0 ? ` (${redoCount})` : ''}</div>
+    `;
+
+    hints.innerHTML = html;
+    hints.style.display = 'flex';
+    _checkSimplifyPanelVisibility();
+  }
+
+  function _pushUndoState() {
+    _undoStack.push(JSON.parse(JSON.stringify(_anns)));
+    _redoStack = [];
+    _updateShortcutHints();
+  }
+
+  function _undo() {
+    if (_undoStack.length === 0) return;
+    const currentState = JSON.parse(JSON.stringify(_anns));
+    _redoStack.push(currentState);
+    _anns = _undoStack.pop();
+    _selIdx = -1;
+    _redraw();
+    _renderAnnList();
+    _updateShortcutHints();
+    if (_autosave) ann2Save();
+  }
+
+  function _redo() {
+    if (_redoStack.length === 0) return;
+    const currentState = JSON.parse(JSON.stringify(_anns));
+    _undoStack.push(currentState);
+    _anns = _redoStack.pop();
+    _selIdx = -1;
+    _redraw();
+    _renderAnnList();
+    _updateShortcutHints();
+    if (_autosave) ann2Save();
   }
 
   async function _loadAutoSettings() {
@@ -1761,6 +1912,7 @@
       if (resp.ok && data.success && data.annotations) {
         if (_autoAnnotateActive) {
           // Checked mode: add permanently and auto-loop approve & next
+          _pushUndoState();
           let added = 0;
           data.annotations.forEach(newAnn => {
             let isDup = false;
@@ -1872,6 +2024,7 @@
   // Helper functions for preview confirm & cancel
   function _confirmTempAutoAnns() {
     if (!_tempAutoAnns || _tempAutoAnns.length === 0) return;
+    _pushUndoState();
     let added = 0;
     _tempAutoAnns.forEach(newAnn => {
       let isDup = false;
@@ -1897,8 +2050,10 @@
     if (window.toast) toast(`Confirmed: ${added} segments saved`);
     _tempAutoAnns = [];
     _selIdx = _anns.length - 1;
+    _tempAnnSelectedVertex = -1;
     _renderAnnList();
     _redraw();
+    _updateShortcutHints();
     if (_autosave) ann2Save();
   }
 
@@ -1906,9 +2061,11 @@
     if (!_tempAutoAnns || _tempAutoAnns.length === 0) return;
     _tempAutoAnns = [];
     _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
+    _tempAnnSelectedVertex = -1;
     _iouRejectedAnns = [];
     _hideSimplifypanel();
     _redraw();
+    _updateShortcutHints();
     if (window.toast) toast('Scan cancelled');
   }
 
@@ -1946,11 +2103,66 @@
     return result.length >= 3 ? result : pts.slice(0, 3);
   }
 
+  function _checkSimplifyPanelVisibility() {
+    let show = false;
+    let targetPts = null;
+
+    if (_tool === 'autoann') {
+      if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+        show = true;
+        targetPts = _tempAutoAnns[_tempAnnSelIdx].points;
+      }
+    } else if (_tool === 'edit') {
+      if (_selIdx >= 0 && _anns[_selIdx] && _anns[_selIdx].type === 'polygon') {
+        show = true;
+        targetPts = _anns[_selIdx].points;
+      }
+    } else if (_tool === 'magic') {
+      if (_magicReplaceIdx >= 0 && _anns[_magicReplaceIdx] && _anns[_magicReplaceIdx].type === 'polygon') {
+        show = true;
+        targetPts = _anns[_magicReplaceIdx].points;
+      }
+    }
+
+    const currentTargetKey = show && targetPts
+      ? `${_tool}_${_tool === 'autoann' ? _tempAnnSelIdx : (_tool === 'magic' ? _magicReplaceIdx : _selIdx)}`
+      : null;
+
+    if (_activeSimplifyTargetKey !== currentTargetKey) {
+      if (_simplifyDirty && _tempAnnOrigPts && _activeSimplifyTargetKey) {
+        const parts = _activeSimplifyTargetKey.split('_');
+        const prevTool = parts[0];
+        const prevIdx = parseInt(parts[1]);
+        if (prevTool === 'autoann') {
+          if (_tempAutoAnns[prevIdx]) {
+            _tempAutoAnns[prevIdx].points = _tempAnnOrigPts.map(p => [...p]);
+          }
+        } else if (prevTool === 'edit') {
+          if (_anns[prevIdx]) {
+            _anns[prevIdx].points = _tempAnnOrigPts.map(p => [...p]);
+          }
+        } else if (prevTool === 'magic') {
+          if (_anns[prevIdx]) {
+            _anns[prevIdx].points = _tempAnnOrigPts.map(p => [...p]);
+          }
+        }
+      }
+
+      _activeSimplifyTargetKey = currentTargetKey;
+
+      if (show && targetPts) {
+        _showSimplifyPanel(targetPts);
+      } else {
+        _hideSimplifypanel();
+      }
+      _redraw();
+    }
+  }
+
   // ── Simplify Panel ──
-  function _showSimplifyPanel() {
+  function _showSimplifyPanel(points) {
     const panel = document.getElementById('ann2-simplify-panel');
     if (!panel) return;
-    // Position: right below hints bar
     panel.style.display = 'flex';
     const slider = document.getElementById('ann2-simplify-slider');
     const valEl = document.getElementById('ann2-simplify-val');
@@ -1959,10 +2171,7 @@
     if (valEl) valEl.textContent = '100%';
     if (applyBtn) { applyBtn.disabled = true; }
     _simplifyDirty = false;
-    // Store original points for reset
-    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
-      _tempAnnOrigPts = _tempAutoAnns[_tempAnnSelIdx].points.map(p => [...p]);
-    }
+    _tempAnnOrigPts = points.map(p => [...p]);
   }
 
   function _hideSimplifypanel() {
@@ -1979,24 +2188,43 @@
     const isDirty = parseInt(val) !== 100;
     if (applyBtn) { applyBtn.disabled = !isDirty; }
     _simplifyDirty = isDirty;
-    // Live preview: apply simplification to temp display
-    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx] && _tempAnnOrigPts) {
-      const pct = parseInt(val);
-      _tempAutoAnns[_tempAnnSelIdx].points = pct === 100
-        ? _tempAnnOrigPts.map(p => [...p])
-        : _simplifyPolygon(_tempAnnOrigPts, pct);
-      _redraw();
+    if (!_tempAnnOrigPts) return;
+    const pct = parseInt(val);
+    const simplifiedPts = pct === 100
+      ? _tempAnnOrigPts.map(p => [...p])
+      : _simplifyPolygon(_tempAnnOrigPts, pct);
+
+    if (_tool === 'autoann' && _tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+      _tempAutoAnns[_tempAnnSelIdx].points = simplifiedPts;
+    } else if (_tool === 'edit' && _selIdx >= 0 && _anns[_selIdx]) {
+      _anns[_selIdx].points = simplifiedPts;
+    } else if (_tool === 'magic' && _magicReplaceIdx >= 0 && _anns[_magicReplaceIdx]) {
+      _anns[_magicReplaceIdx].points = simplifiedPts;
     }
+    _redraw();
   };
 
   window.ann2ApplySimplify = function () {
     const applyBtn = document.getElementById('ann2-simplify-apply');
     if (applyBtn?.disabled) return;
-    // Commit simplified points as the new original
-    if (_tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
-      _tempAnnOrigPts = _tempAutoAnns[_tempAnnSelIdx].points.map(p => [...p]);
+
+    if (_tool === 'edit' || _tool === 'magic') {
+      _pushUndoState();
     }
-    // Reset slider
+
+    let currentPts = null;
+    if (_tool === 'autoann' && _tempAnnSelIdx >= 0 && _tempAutoAnns[_tempAnnSelIdx]) {
+      currentPts = _tempAutoAnns[_tempAnnSelIdx].points;
+    } else if (_tool === 'edit' && _selIdx >= 0 && _anns[_selIdx]) {
+      currentPts = _anns[_selIdx].points;
+    } else if (_tool === 'magic' && _magicReplaceIdx >= 0 && _anns[_magicReplaceIdx]) {
+      currentPts = _anns[_magicReplaceIdx].points;
+    }
+
+    if (currentPts) {
+      _tempAnnOrigPts = currentPts.map(p => [...p]);
+    }
+
     const slider = document.getElementById('ann2-simplify-slider');
     const valEl = document.getElementById('ann2-simplify-val');
     if (slider) slider.value = 100;
@@ -2004,6 +2232,9 @@
     if (applyBtn) applyBtn.disabled = true;
     _simplifyDirty = false;
     if (window.toast) toast('Simplify applied ✓');
+    if ((_tool === 'edit' || _tool === 'magic') && _autosave) {
+      ann2Save();
+    }
   };
 
   // ── IoU Rejected Toggle ──

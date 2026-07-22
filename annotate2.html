@@ -64,11 +64,6 @@
 
     <div style="flex:1;"></div>
 
-    <div id="ann2-hint-text"
-      style="font-size:.7rem; color:var(--text-muted); margin-right:12px; white-space:nowrap; transition: all 0.15s;">
-      Scroll = zoom · H = pan
-    </div>
-
     <label
       style="font-size:.78rem;color:var(--text-muted);white-space:nowrap;display:flex;align-items:center;gap:6px;cursor:pointer;margin-right:12px;user-select:none;">
       <input type="checkbox" id="ann2-autosave-chk" onchange="ann2ToggleAutosave(this.checked)"
@@ -182,27 +177,24 @@
           <div id="ann2-processing-detail" style="color:var(--text-muted); font-size:.8rem;"></div>
         </div>
 
-        <!-- Shortcut hints (visible in auto annotate mode) -->
-        <div id="ann2-auto-hints" style="display:none; position:absolute; top:20px; right:70px; z-index:100; flex-direction:column; gap:4px;">
-          <div class="ann2-shortcut-badge"><kbd>S</kbd> Process</div>
-          <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm</div>
-          <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel</div>
-          <div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete ann</div>
-        </div>
+        <!-- Floating overlay for shortcuts and simplify panel -->
+        <div style="position:absolute; top:20px; right:70px; z-index:100; display:flex; flex-direction:column; gap:8px; align-items:flex-end; pointer-events:none;">
+          <div id="ann2-shortcut-hints" style="display:none; flex-direction:column; gap:4px; pointer-events:auto;"></div>
 
-        <!-- Simplify Slider Panel (shown when temp ann selected during review) -->
-        <div id="ann2-simplify-panel" style="display:none; position:absolute; top:160px; right:70px; z-index:101; flex-direction:column; gap:6px; background:rgba(13,18,34,0.92); border:1px solid var(--border); border-radius:8px; padding:10px 12px; backdrop-filter:blur(8px); min-width:180px;">
-          <div style="font-size:.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">Simplify</div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <input type="range" id="ann2-simplify-slider" min="1" max="100" value="100"
-              style="flex:1; accent-color:#a855f7; cursor:pointer;"
-              oninput="ann2OnSimplifySlider(this.value)">
-            <span id="ann2-simplify-val" style="font-size:.78rem; color:#c4b5fd; min-width:32px; text-align:right;">100%</span>
+          <!-- Simplify Slider Panel (shown when temp/permanent polygon is selected) -->
+          <div id="ann2-simplify-panel" style="display:none; flex-direction:column; gap:6px; background:rgba(13,18,34,0.92); border:1px solid var(--border); border-radius:8px; padding:10px 12px; backdrop-filter:blur(8px); min-width:180px; pointer-events:auto;">
+            <div style="font-size:.7rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">Simplify</div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="range" id="ann2-simplify-slider" min="1" max="100" value="100"
+                style="flex:1; accent-color:#a855f7; cursor:pointer;"
+                oninput="ann2OnSimplifySlider(this.value)">
+              <span id="ann2-simplify-val" style="font-size:.78rem; color:#c4b5fd; min-width:32px; text-align:right;">100%</span>
+            </div>
+            <button id="ann2-simplify-apply" onclick="ann2ApplySimplify()" disabled
+              style="padding:4px 10px; font-size:.75rem; border-radius:5px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; cursor:not-allowed; opacity:0.38; transition:opacity .15s;">
+              Apply
+            </button>
           </div>
-          <button id="ann2-simplify-apply" onclick="ann2ApplySimplify()" disabled
-            style="padding:4px 10px; font-size:.75rem; border-radius:5px; background:linear-gradient(135deg,#a855f7,#7c3aed); border:none; color:#fff; cursor:not-allowed; opacity:0.38; transition:opacity .15s;">
-            Apply
-          </button>
         </div>
 
       </div>

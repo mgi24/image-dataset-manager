@@ -41,9 +41,20 @@ def init_db():
             dataset_name TEXT PRIMARY KEY,
             model TEXT DEFAULT 'sam3.1',
             prompts TEXT DEFAULT '[]',
-            on_approved_tags TEXT DEFAULT '[]'
+            on_approved_tags TEXT DEFAULT '[]',
+            conf REAL DEFAULT 0.25,
+            iou REAL DEFAULT 0.85
         );
     """)
+    # Add columns if migrating an existing DB
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN conf REAL DEFAULT 0.25;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN iou REAL DEFAULT 0.85;")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -89,6 +100,8 @@ class AutoAnnotateSettingsUpdate(BaseModel):
     model: str = 'sam3.1'
     prompts: list = []       # [{"prompt": str, "class_id": int}, ...]
     on_approved_tags: list = []
+    conf: Optional[float] = 0.25
+    iou: Optional[float] = 0.85
 
 class SamAutoAnnotateRequest(BaseModel):
     filename: str
@@ -570,7 +583,7 @@ def create_tag(payload: TagCreate):
         conn.close()
     return {"success": True}
 
-@app.delete("/api/tags/{tag_name}")
+@app.delete("/api/tags/{tag_name:path}")
 def delete_tag(tag_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -942,12 +955,18 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 def get_auto_annotate_settings(dataset_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT model, prompts, on_approved_tags FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {"model": row[0], "prompts": json.loads(row[1]), "on_approved_tags": json.loads(row[2])}
-    return {"model": "sam3.1", "prompts": [], "on_approved_tags": []}
+        return {
+            "model": row[0],
+            "prompts": json.loads(row[1]),
+            "on_approved_tags": json.loads(row[2]),
+            "conf": row[3] if row[3] is not None else 0.25,
+            "iou": row[4] if row[4] is not None else 0.85
+        }
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85}
 
 
 @app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
@@ -955,10 +974,15 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(dataset_name) DO UPDATE SET model=excluded.model, prompts=excluded.prompts, on_approved_tags=excluded.on_approved_tags;
-    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags)))
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(dataset_name) DO UPDATE SET 
+            model=excluded.model, 
+            prompts=excluded.prompts, 
+            on_approved_tags=excluded.on_approved_tags,
+            conf=excluded.conf,
+            iou=excluded.iou;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou))
     conn.commit()
     conn.close()
     return {"success": True}
