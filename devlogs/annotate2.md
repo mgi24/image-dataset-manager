@@ -167,3 +167,19 @@ Mendukung seluruh aksi modifikasi data anotasi:
 ### 8.3 Integrasi UI Shortcut
 - Informasi shortcut `Ctrl+Z` dan `Ctrl+Y` selalu ditampilkan pada panel shortcut di pojok kanan atas kanvas.
 - Badge shortcut akan meredup (`opacity: 0.4`) ketika stack kosong, dan menyala terang beserta indikator jumlah aksi (`Undo (3)`) ketika riwayat tersedia.
+
+---
+
+## 🤖 9. Fitur Baru: 2-Pass Recheck & Pilihan GPU (VRAM Management)
+
+### 9.1 Alur 2-Pass Auto-Annotate (Refinement)
+Jika opsi **2-Pass Recheck** aktif:
+1. **Pass 1 (Text Prompt)**: Model memindai objek berdasarkan text prompt. Hasil deteksi langsung difilter berdasarkan threshold `Conf` dan `IoU` deduplikasi (membandingkan terhadap anotasi yang sudah tersimpan di disk) sebelum dilanjutkan ke tahap berikutnya untuk menghindari pemrosesan ganda yang tidak efisien.
+2. **Pass 2 (Point Prompt)**: Dari mask Pass 1 yang lolos, dicari koordinat titik tengahnya (centroid) menggunakan momen gambar. Titik ini dikirim ke model check kedua (`sam3` atau `sam2.1_l`) sebagai positive point prompt untuk menghasilkan segmentasi yang lebih akurat.
+3. **Threshold Validasi Ukuran (Min & Max Area)**: Dibandingkan luas area mask Pass 2 dengan Pass 1. Jika rasionya berada di luar rentang treshold (default `70%` s.d. `120%`), mask Pass 2 dibatalkan dan sistem otomatis melakukan rollback ke mask Pass 1.
+
+### 9.2 Pemilihan GPU Per Model (VRAM Management)
+- Terdapat pilihan dropdown **GPU** di bawah model utama (Pass 1) dan model recheck (Pass 2) di panel pengaturan Auto Annotate.
+- Opsi GPU diambil dinamis dari backend (`GET /api/gpu/list`) menggunakan `torch.cuda`.
+- Memungkinkan user memisahkan pemuatan model Pass 1 dan Pass 2 di GPU yang berbeda (atau CPU) untuk mencegah error Out-Of-Memory (OOM) pada GPU tunggal.
+

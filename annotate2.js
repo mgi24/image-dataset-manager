@@ -1633,6 +1633,21 @@
         _autoApprovedTags = [...(s.on_approved_tags || [])];
       }
     } catch (e) { console.error('Failed to load auto-annotate settings', e); }
+
+    // Fetch GPU list and populate device selects
+    try {
+      const gr = await fetch('/api/gpu/list');
+      if (gr.ok) {
+        const gd = await gr.json();
+        const gpus = gd.gpus || [];
+        ['ann2-auto-device', 'ann2-recheck-device'].forEach(id => {
+          const sel = document.getElementById(id);
+          if (!sel) return;
+          sel.innerHTML = gpus.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+        });
+      }
+    } catch (e) { console.warn('Could not fetch GPU list', e); }
+
     _renderAutoSettingsPanel();
     // Freshly loaded from server = clean state
     _settingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
@@ -1653,6 +1668,31 @@
     // Model
     const modelSel = document.getElementById('ann2-auto-model');
     if (modelSel) modelSel.value = _autoAnnotateSettings.model || 'sam3.1';
+
+    // Main GPU device
+    const deviceSel = document.getElementById('ann2-auto-device');
+    if (deviceSel) deviceSel.value = _autoAnnotateSettings.device || 'cuda:0';
+
+    // Recheck
+    const recheckChk = document.getElementById('ann2-auto-recheck');
+    if (recheckChk) {
+      recheckChk.checked = !!_autoAnnotateSettings.recheck;
+      ann2ToggleRecheck(recheckChk.checked);
+    }
+    const recheckModelSel = document.getElementById('ann2-auto-recheck-model');
+    if (recheckModelSel) recheckModelSel.value = _autoAnnotateSettings.recheck_model || 'sam3';
+    const recheckDeviceSel = document.getElementById('ann2-recheck-device');
+    if (recheckDeviceSel) recheckDeviceSel.value = _autoAnnotateSettings.recheck_device || 'cuda:0';
+
+    // Recheck Threshold Sliders
+    const recheckMinSlider = document.getElementById('ann2-recheck-min-slider');
+    const recheckMinVal = document.getElementById('ann2-recheck-min-val');
+    const recheckMaxSlider = document.getElementById('ann2-recheck-max-slider');
+    const recheckMaxVal = document.getElementById('ann2-recheck-max-val');
+    const minPct = Math.round((_autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70) * 100);
+    const maxPct = Math.round((_autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20) * 100);
+    if (recheckMinSlider) { recheckMinSlider.value = minPct; if (recheckMinVal) recheckMinVal.textContent = minPct + '%'; }
+    if (recheckMaxSlider) { recheckMaxSlider.value = maxPct; if (recheckMaxVal) recheckMaxVal.textContent = maxPct + '%'; }
 
     // Prompts
     const container = document.getElementById('ann2-auto-prompts');
@@ -1802,6 +1842,11 @@
     sel.value = '';
   };
 
+  window.ann2ToggleRecheck = function (checked) {
+    const group = document.getElementById('ann2-auto-recheck-model-group');
+    if (group) group.style.display = checked ? 'flex' : 'none';
+  };
+
   window.ann2SaveAutoSettings = async function () {
     if (!_ds) return;
     // Collect prompts from DOM
@@ -1818,8 +1863,14 @@
     const model = document.getElementById('ann2-auto-model')?.value || 'sam3.1';
     const conf = parseFloat(document.getElementById('ann2-conf-slider')?.value || 25) / 100;
     const iou  = parseFloat(document.getElementById('ann2-iou-slider')?.value  || 85) / 100;
+    const device = document.getElementById('ann2-auto-device')?.value || 'cuda:0';
+    const recheck = !!document.getElementById('ann2-auto-recheck')?.checked;
+    const recheck_model = document.getElementById('ann2-auto-recheck-model')?.value || 'sam3';
+    const recheck_device = document.getElementById('ann2-recheck-device')?.value || 'cuda:0';
+    const recheck_min_area = parseFloat(document.getElementById('ann2-recheck-min-slider')?.value || 70) / 100;
+    const recheck_max_area = parseFloat(document.getElementById('ann2-recheck-max-slider')?.value || 120) / 100;
 
-    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou };
+    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area };
 
     try {
       await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
@@ -1905,7 +1956,14 @@
           filename: imgObj.filename,
           model: _autoAnnotateSettings.model,
           prompts: _autoAnnotateSettings.prompts,
-          conf: _autoAnnotateSettings.conf || 0.25
+          conf: _autoAnnotateSettings.conf || 0.25,
+          iou: _autoAnnotateSettings.iou || 0.85,
+          device: _autoAnnotateSettings.device || 'cuda:0',
+          recheck: !!_autoAnnotateSettings.recheck,
+          recheck_model: _autoAnnotateSettings.recheck_model || 'sam3',
+          recheck_device: _autoAnnotateSettings.recheck_device || 'cuda:0',
+          recheck_min_area: _autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70,
+          recheck_max_area: _autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20
         })
       });
       const data = await resp.json();

@@ -1,4 +1,5 @@
-<div class="llm-settings-page">
+<div style="width: 100%; max-height: calc(100vh - 80px); overflow-y: auto;">
+  <div class="llm-settings-page" style="max-width: 650px">
   <h2>Dataset Settings</h2>
   <p>Konfigurasi tipe dataset untuk fitur Annotation editor.</p>
   <div class="setting-group">
@@ -37,5 +38,22 @@
   <hr class="settings-divider">
   <div style="font-size:.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Available Models</div>
   <div class="model-chips" id="set-model-chips"><span style="color:var(--text-muted);font-size:.85rem">Klik "Test Connection" untuk melihat model…</span></div>
+  <hr class="settings-divider">
+
+  <h2>SAM Model Memory</h2>
+  <p>Cek status model SAM (Segment Anything) yang dimuat di memori dan bebaskan (unload) memori GPU/RAM bila diperlukan.</p>
+  <div class="setting-group" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+      <span style="font-weight: 600; color: var(--text-primary);">Status Memori</span>
+      <button class="btn btn-ghost" onclick="checkSamModelStatus()" id="set-sam-check-btn" style="padding: 6px 12px; font-size: 0.85rem;">Check Status</button>
+    </div>
+    <div id="sam-model-status-list" style="display: flex; flex-direction: column; gap: 8px;">
+      <span style="color: var(--text-muted); font-size: 0.85rem;">Belum diperiksa. Klik "Check Status".</span>
+    </div>
+  </div>
+  <div class="settings-btn-row">
+    <button class="btn btn-danger" onclick="unloadSamModels()" id="set-sam-unload-btn" disabled style="background: var(--danger); color: white;">Unload Models</button>
+  </div>
+  </div>
 </div>
 <script src="/settings.js"></script>

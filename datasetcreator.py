@@ -43,7 +43,13 @@ def init_db():
             prompts TEXT DEFAULT '[]',
             on_approved_tags TEXT DEFAULT '[]',
             conf REAL DEFAULT 0.25,
-            iou REAL DEFAULT 0.85
+            iou REAL DEFAULT 0.85,
+            device TEXT DEFAULT 'cuda:0',
+            recheck INTEGER DEFAULT 0,
+            recheck_model TEXT DEFAULT 'sam3',
+            recheck_device TEXT DEFAULT 'cuda:0',
+            recheck_min_area REAL DEFAULT 0.70,
+            recheck_max_area REAL DEFAULT 1.20
         );
     """)
     # Add columns if migrating an existing DB
@@ -55,6 +61,69 @@ def init_db():
         cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN iou REAL DEFAULT 0.85;")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck INTEGER DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_model TEXT DEFAULT 'sam3';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_min_area REAL DEFAULT 0.70;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_max_area REAL DEFAULT 1.20;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN device TEXT DEFAULT 'cuda:0';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_device TEXT DEFAULT 'cuda:0';")
+    except sqlite3.OperationalError:
+        pass
+
+    # Create LLM Settings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS llm_settings (
+            id INTEGER PRIMARY KEY,
+            api_url TEXT DEFAULT 'http://127.0.0.1:1234',
+            api_key TEXT DEFAULT '',
+            model TEXT DEFAULT '',
+            dataset_type TEXT DEFAULT 'object_detection'
+        );
+    """)
+    # Insert default row if not exists
+    cursor.execute("""
+        INSERT OR IGNORE INTO llm_settings (id, api_url, api_key, model, dataset_type)
+        VALUES (1, 'http://127.0.0.1:1234', '', '', 'object_detection');
+    """)
+
+    # Try migration from JSON to DB
+    json_path = os.path.join(BASE_DIR, 'llm_settings.json')
+    if os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            api_url = data.get("api_url", "http://127.0.0.1:1234")
+            api_key = data.get("api_key", "")
+            model = data.get("model", "")
+            dataset_type = data.get("dataset_type", "object_detection")
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO llm_settings (id, api_url, api_key, model, dataset_type)
+                VALUES (1, ?, ?, ?, ?);
+            """, (api_url, api_key, model, dataset_type))
+            conn.commit()
+            print("Successfully migrated llm_settings.json to database.")
+            # Rename the json file to prevent re-migration
+            os.rename(json_path, json_path + ".bak")
+        except Exception as e:
+            print(f"Failed to migrate llm_settings.json: {e}")
+
     conn.commit()
     conn.close()
 
@@ -102,11 +171,25 @@ class AutoAnnotateSettingsUpdate(BaseModel):
     on_approved_tags: list = []
     conf: Optional[float] = 0.25
     iou: Optional[float] = 0.85
+    device: Optional[str] = 'cuda:0'
+    recheck: Optional[bool] = False
+    recheck_model: Optional[str] = 'sam3'
+    recheck_device: Optional[str] = 'cuda:0'
+    recheck_min_area: Optional[float] = 0.70
+    recheck_max_area: Optional[float] = 1.20
 
 class SamAutoAnnotateRequest(BaseModel):
     filename: str
     model: str = 'sam3.1'
     prompts: list = []       # [{"prompt": str, "class_id": int}, ...]
+    conf: Optional[float] = 0.25
+    iou: Optional[float] = 0.85
+    device: Optional[str] = 'cuda:0'
+    recheck: Optional[bool] = False
+    recheck_model: Optional[str] = 'sam3'
+    recheck_device: Optional[str] = 'cuda:0'
+    recheck_min_area: Optional[float] = 0.70
+    recheck_max_area: Optional[float] = 1.20
 
 class LLMSettings(BaseModel):
     api_url: str
@@ -122,7 +205,7 @@ class SaveAnnotationsRequest(BaseModel):
     filename: str
     annotations: list
 
-LLM_SETTINGS_PATH = os.path.join(BASE_DIR, 'llm_settings.json')
+
 
 # ─────────────────────────────────────────────
 # Helpers
@@ -751,18 +834,30 @@ def get_delete_class_progress(dataset_name: str, class_id: int):
 
 @app.get("/api/llm-settings")
 def get_llm_settings():
-    if os.path.exists(LLM_SETTINGS_PATH):
-        with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if "dataset_type" not in data:
-                data["dataset_type"] = "object_detection"
-            return data
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT api_url, api_key, model, dataset_type FROM llm_settings WHERE id = 1;")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "api_url": row[0],
+            "api_key": row[1],
+            "model": row[2],
+            "dataset_type": row[3]
+        }
     return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection"}
 
 @app.post("/api/llm-settings")
 def save_llm_settings(settings: LLMSettings):
-    with open(LLM_SETTINGS_PATH, 'w', encoding='utf-8') as f:
-        json.dump(settings.dict(), f, indent=2)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO llm_settings (id, api_url, api_key, model, dataset_type)
+        VALUES (1, ?, ?, ?, ?);
+    """, (settings.api_url, settings.api_key, settings.model, settings.dataset_type))
+    conn.commit()
+    conn.close()
     return {"success": True}
 
 @app.get("/api/dataset/{dataset_name}/check-segment")
@@ -857,6 +952,29 @@ class SamPredictRequest(BaseModel):
 _sam_models = {}
 _sam_model_lock = threading.Lock()
 
+_sam_predictors = {}
+_sam_predictor_lock = threading.Lock()
+_sam_inference_lock = threading.Lock()
+
+def _download_model_file(url: str, output_path: str):
+    import httpx
+    print(f"Downloading model from {url} to {output_path}...")
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=60.0) as r:
+            if r.status_code != 200:
+                raise Exception(f"HTTP error {r.status_code}")
+            with open(output_path, "wb") as f:
+                for chunk in r.iter_bytes(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+    except Exception as e:
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to download model weights: {str(e)}")
+
 def _get_sam_model(model_name='sam3'):
     global _sam_models
     if model_name not in _sam_models:
@@ -865,10 +983,33 @@ def _get_sam_model(model_name='sam3'):
                 model_file = f"{model_name}.pt"
                 model_path = os.path.join(BASE_DIR, model_file)
                 if not os.path.exists(model_path):
-                    raise HTTPException(status_code=503, detail=f"{model_file} not found")
+                    if model_name == 'sam2.1_l':
+                        url = "https://github.com/ultralytics/assets/releases/download/v8.3.0/sam2.1_l.pt"
+                        _download_model_file(url, model_path)
+                    else:
+                        raise HTTPException(status_code=503, detail=f"{model_file} not found")
                 from ultralytics import SAM
                 _sam_models[model_name] = SAM(model_path)
     return _sam_models[model_name]
+
+def _get_sam_predictor(model_name, model_path):
+    global _sam_predictors
+    if model_name not in _sam_predictors:
+        with _sam_predictor_lock:
+            if model_name not in _sam_predictors:
+                from ultralytics.models.sam import SAM3SemanticPredictor
+                overrides = dict(
+                    conf=0.5,
+                    task="segment",
+                    mode="predict",
+                    model=model_path,
+                    save=False,
+                    device="cuda",
+                    half=False
+                )
+                _sam_predictors[model_name] = SAM3SemanticPredictor(overrides=overrides)
+    return _sam_predictors[model_name]
+
 
 
 @app.post("/api/dataset/{dataset_name}/sam-predict")
@@ -955,7 +1096,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 def get_auto_annotate_settings(dataset_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -964,9 +1105,15 @@ def get_auto_annotate_settings(dataset_name: str):
             "prompts": json.loads(row[1]),
             "on_approved_tags": json.loads(row[2]),
             "conf": row[3] if row[3] is not None else 0.25,
-            "iou": row[4] if row[4] is not None else 0.85
+            "iou": row[4] if row[4] is not None else 0.85,
+            "device": row[5] if row[5] is not None else 'cuda:0',
+            "recheck": bool(row[6]) if row[6] is not None else False,
+            "recheck_model": row[7] if row[7] is not None else 'sam3',
+            "recheck_device": row[8] if row[8] is not None else 'cuda:0',
+            "recheck_min_area": row[9] if row[9] is not None else 0.70,
+            "recheck_max_area": row[10] if row[10] is not None else 1.20
         }
-    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85}
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20}
 
 
 @app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
@@ -974,15 +1121,21 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dataset_name) DO UPDATE SET 
             model=excluded.model, 
             prompts=excluded.prompts, 
             on_approved_tags=excluded.on_approved_tags,
             conf=excluded.conf,
-            iou=excluded.iou;
-    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou))
+            iou=excluded.iou,
+            device=excluded.device,
+            recheck=excluded.recheck,
+            recheck_model=excluded.recheck_model,
+            recheck_device=excluded.recheck_device,
+            recheck_min_area=excluded.recheck_min_area,
+            recheck_max_area=excluded.recheck_max_area;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area))
     conn.commit()
     conn.close()
     return {"success": True}
@@ -1025,7 +1178,6 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
     try:
         import cv2
         import numpy as np
-        from ultralytics.models.sam import SAM3SemanticPredictor
 
         model_name = payload.model if payload.model in ('sam3', 'sam3.1') else 'sam3.1'
         model_file = f"{model_name}.pt"
@@ -1043,24 +1195,32 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
         text_prompts = [p["prompt"] for p in payload.prompts]
         class_map = {p["prompt"]: p["class_id"] for p in payload.prompts}
 
-        # Setup SAM3 Semantic Predictor
-        overrides = dict(
-            conf=0.5,
-            task="segment",
-            mode="predict",
-            model=model_path,
-            save=False,
-            device="cuda",
-            half=False
-        )
-        predictor = SAM3SemanticPredictor(overrides=overrides)
-        predictor.set_image(image_path)
-        results = predictor(text=text_prompts)
+        # Resolve device for pass 1
+        p1_device = payload.device if payload.device else 'cuda:0'
+
+        # Setup SAM3 Semantic Predictor from cache
+        predictor = _get_sam_predictor(model_name, model_path)
+        with _sam_inference_lock:
+            predictor.set_image(image_path)
+            results = predictor(text=text_prompts, device=p1_device)
 
         if not results or len(results) == 0:
             return {"success": False, "error": "No results from SAM", "annotations": []}
 
-        annotations = []
+        # Load existing annotations from disk to pre-seed IoU dedup
+        # This ensures masks that overlap with already-saved annotations are rejected
+        # BEFORE entering the expensive pass-2 recheck, not after.
+        label_path = None
+        for subdir in [os.path.join("annotate", "labels"), "labels"]:
+            lp = os.path.normpath(os.path.join(dataset_path, subdir,
+                 os.path.splitext(payload.filename)[0] + ".txt"))
+            if lp.startswith(os.path.normpath(DATASET_DIR)) and os.path.isfile(lp):
+                label_path = lp
+                break
+        existing_annotations = parse_label_file(label_path) if label_path else []
+        # annotations list starts with existing ones so new masks can dedup against them
+        # but we keep track of which index is the first "new" annotation
+        annotations = list(existing_annotations)
         result = results[0]
 
         if result.masks is None or len(result.masks) == 0:
@@ -1069,8 +1229,24 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
         masks_data = result.masks.data.cpu().numpy()
         # cls assignments from result (semantic labels per mask)
         cls_data = result.boxes.cls.cpu().numpy() if result.boxes is not None and result.boxes.cls is not None else None
+        confs = result.boxes.conf.cpu().numpy() if (result.boxes is not None and result.boxes.conf is not None) else None
+        print(f"[AutoAnnotate] Pass 1: {len(masks_data)} masks from SAM, {len(existing_annotations)} existing annotations loaded for IoU dedup")
+
+        sam_model = None
+        if payload.recheck:
+            try:
+                recheck_model_name = payload.recheck_model if payload.recheck_model in ('sam3', 'sam2.1_l') else 'sam3'
+                sam_model = _get_sam_model(recheck_model_name)
+            except Exception as e:
+                print(f"Failed to load SAM model '{payload.recheck_model}' for recheck: {e}")
 
         for mi in range(len(masks_data)):
+            # 1. Check confidence
+            if confs is not None and mi < len(confs):
+                conf_val = float(confs[mi])
+                if conf_val < (payload.conf or 0.25):
+                    continue
+
             mask = masks_data[mi].astype(np.uint8)
             if mask.shape[0] != h or mask.shape[1] != w:
                 mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
@@ -1080,8 +1256,8 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
                 continue
 
             largest = max(contours, key=cv2.contourArea)
-            polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in largest]
-            if len(polygon) < 3:
+            orig_polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in largest]
+            if len(orig_polygon) < 3:
                 continue
 
             # Determine class_id from semantic label index
@@ -1095,14 +1271,64 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
             else:
                 class_id = payload.prompts[0]["class_id"] if payload.prompts else 0
 
-            # Check IoU against already-accepted annotations (dedup)
+            # 2. Check IoU against already-accepted annotations (dedup) before Pass 2
             is_dup = False
+            iou_thresh = payload.iou if payload.iou is not None else 0.85
             for existing in annotations:
-                iou = _polygon_iou(polygon, existing["points"])
-                if iou > 0.85:
+                iou_val = _polygon_iou(orig_polygon, existing["points"])
+                if iou_val > iou_thresh:
                     is_dup = True
                     break
             if is_dup:
+                continue
+
+            # --- PASS 2: RECHECK (POINT PROMPT FROM CENTROID) ---
+            polygon = None
+            if payload.recheck and sam_model is not None:
+                M = cv2.moments(largest)
+                if M["m00"] != 0:
+                    cX = int(M["m10"] / M["m00"])
+                    cY = int(M["m01"] / M["m00"])
+                    try:
+                        with _sam_inference_lock:
+                            sam_results = sam_model(
+                                image_path,
+                                points=[[cX, cY]],
+                                labels=[1],
+                                device=payload.recheck_device if payload.recheck_device else 'cuda:0',
+                                imgsz=max(h, w),
+                                verbose=False
+                            )
+                        if sam_results and sam_results[0].masks is not None and len(sam_results[0].masks) > 0:
+                            s_masks_data = sam_results[0].masks.data.cpu().numpy()
+                            s_confs = sam_results[0].boxes.conf.cpu().numpy() if sam_results[0].boxes is not None and sam_results[0].boxes.conf is not None else [1.0] * len(s_masks_data)
+                            s_best_idx = int(np.argmax(s_confs))
+                            s_mask = s_masks_data[s_best_idx].astype(np.uint8)
+
+                            # --- Compare Area Ratios ---
+                            orig_area = float(np.sum(mask > 0))
+                            s_area = float(np.sum(s_mask > 0))
+                            if orig_area > 0:
+                                ratio = s_area / orig_area
+                                min_limit = payload.recheck_min_area if payload.recheck_min_area is not None else 0.70
+                                max_limit = payload.recheck_max_area if payload.recheck_max_area is not None else 1.20
+                                if min_limit <= ratio <= max_limit:
+                                    if s_mask.shape[0] != h or s_mask.shape[1] != w:
+                                        s_mask = cv2.resize(s_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+                                    s_contours, _ = cv2.findContours(s_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                    if s_contours:
+                                        s_largest = max(s_contours, key=cv2.contourArea)
+                                        polygon = [[float(pt[0][0]) / w, float(pt[0][1]) / h] for pt in s_largest]
+                                else:
+                                    print(f"SAM recheck index {mi}: Size ratio {ratio:.2f} outside [{min_limit:.2f}, {max_limit:.2f}], fallback to pass 1")
+
+                    except Exception as e:
+                        print(f"SAM recheck error on index {mi}: {e}")
+
+            if polygon is None:
+                polygon = orig_polygon
+
+            if len(polygon) < 3:
                 continue
 
             annotations.append({
@@ -1111,7 +1337,8 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
                 "type": "polygon"
             })
 
-        return {"success": True, "annotations": annotations}
+        new_annotations = annotations[len(existing_annotations):]
+        return {"success": True, "annotations": new_annotations}
 
     except HTTPException:
         raise
@@ -1119,17 +1346,72 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
         raise HTTPException(status_code=500, detail=f"SAM auto-annotate error: {str(e)}")
 
 
+
+@app.get("/api/gpu/list")
+def list_gpus():
+    """List available CUDA GPUs."""
+    try:
+        import torch
+        gpus = []
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                name = torch.cuda.get_device_name(i)
+                mem_total = torch.cuda.get_device_properties(i).total_memory // (1024 ** 2)
+                gpus.append({"id": f"cuda:{i}", "name": f"GPU {i}: {name} ({mem_total} MB)"})
+        if not gpus:
+            gpus.append({"id": "cpu", "name": "CPU (no CUDA)"})
+        else:
+            gpus.append({"id": "cpu", "name": "CPU"})
+        return {"success": True, "gpus": gpus}
+    except Exception as e:
+        return {"success": False, "gpus": [{"id": "cpu", "name": "CPU"}], "error": str(e)}
+
+@app.get("/api/sam/status")
+def get_sam_status():
+    global _sam_models, _sam_predictors
+    loaded_point = list(_sam_models.keys())
+    loaded_auto = list(_sam_predictors.keys())
+    return {
+        "success": True,
+        "loaded_point_models": loaded_point,
+        "loaded_auto_models": loaded_auto
+    }
+
+@app.post("/api/sam/unload")
+def unload_sam_models():
+    global _sam_models, _sam_predictors
+    with _sam_model_lock:
+        _sam_models.clear()
+    with _sam_predictor_lock:
+        _sam_predictors.clear()
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    return {"success": True, "message": "Models unloaded successfully"}
+
+
 # ─────────────────────────────────────────────
 # LLM Proxy (CORS transparent bridge)
 # ─────────────────────────────────────────────
 
 def _load_llm_settings_dict():
-    if os.path.exists(LLM_SETTINGS_PATH):
-        with open(LLM_SETTINGS_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if "dataset_type" not in data:
-                data["dataset_type"] = "object_detection"
-            return data
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT api_url, api_key, model, dataset_type FROM llm_settings WHERE id = 1;")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "api_url": row[0],
+            "api_key": row[1],
+            "model": row[2],
+            "dataset_type": row[3]
+        }
     return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection"}
 
 @app.get("/api/llm/models")

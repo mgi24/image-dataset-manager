@@ -13,6 +13,7 @@ function loadLLMSettings() {
       if (dsTypeSel) dsTypeSel.value = s.dataset_type || 'object_detection';
     })
     .catch(() => { });
+  checkSamModelStatus();
 }
 
 function saveLLMSettings() {
@@ -180,4 +181,54 @@ function testLLMConnection() {
       statusEl.innerHTML = `<span class="conn-dot err"></span> Gagal: ${esc(e.message)}`;
       chipsEl.innerHTML = '';
     });
+}
+
+async function checkSamModelStatus() {
+  const listEl = document.getElementById('sam-model-status-list');
+  const unloadBtn = document.getElementById('set-sam-unload-btn');
+  if (!listEl) return;
+
+  try {
+    const r = await fetch('/api/sam/status');
+    if (!r.ok) throw new Error('Network error');
+    const data = await r.json();
+
+    const loadedPoint = data.loaded_point_models || [];
+    const loadedAuto = data.loaded_auto_models || [];
+
+    if (loadedPoint.length === 0 && loadedAuto.length === 0) {
+      listEl.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Tidak ada model SAM yang aktif di memori.</span>';
+      if (unloadBtn) unloadBtn.disabled = true;
+    } else {
+      let html = '';
+      if (loadedPoint.length > 0) {
+        html += `<div style="font-size: 0.85rem; color: var(--text-primary); margin-bottom: 4px;">Point Predictor: <code style="color: var(--accent-light); font-weight: 700;">${loadedPoint.join(', ')}</code></div>`;
+      }
+      if (loadedAuto.length > 0) {
+        html += `<div style="font-size: 0.85rem; color: var(--text-primary);">Auto Predictor: <code style="color: var(--accent-light); font-weight: 700;">${loadedAuto.join(', ')}</code></div>`;
+      }
+      listEl.innerHTML = html;
+      if (unloadBtn) unloadBtn.disabled = false;
+    }
+  } catch (e) {
+    listEl.innerHTML = `<span style="color: var(--danger); font-size: 0.85rem;">Gagal memeriksa status: ${esc(e.message)}</span>`;
+  }
+}
+
+async function unloadSamModels() {
+  const unloadBtn = document.getElementById('set-sam-unload-btn');
+  if (unloadBtn) unloadBtn.disabled = true;
+  showLoader(true, 'Membebaskan memori model...');
+  try {
+    const r = await fetch('/api/sam/unload', { method: 'POST' });
+    if (!r.ok) throw new Error('Failed to unload');
+    const data = await r.json();
+    toast('Semua model SAM berhasil di-unload dari memori!');
+    await checkSamModelStatus();
+  } catch (e) {
+    toast(`Gagal unload model: ${e.message}`, 'err');
+    if (unloadBtn) unloadBtn.disabled = false;
+  } finally {
+    showLoader(false);
+  }
 }
