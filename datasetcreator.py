@@ -1170,7 +1170,7 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dataset_name) DO UPDATE SET 
             model=excluded.model, 
             prompts=excluded.prompts, 

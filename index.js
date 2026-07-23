@@ -49,14 +49,15 @@ function restoreFromURL(initial = true) {
   const parts = window.location.pathname.replace(/^\//, '').split('/');
   const dsName = parts[0] ? decodeURIComponent(parts[0]) : '';
   const page = parts[1] || 'dataset';
+  const subIndex = (parts[1] === 'annotate2' && parts[2]) ? parseInt(parts[2]) : 0;
   if (!dsName || dsName === '') {
     if (!initial) { selected.clear(); selectMode = false; ds = null; annData = null; switchView('home-view'); renderHome(); }
     return;
   }
   if (ds && ds.name === dsName) {
-    switchPage(page, false);  // already loaded, just switch tab
+    switchPage(page, false, subIndex);  // already loaded, just switch tab
   } else {
-    loadDataset(dsName, page, false); // load then go to page
+    loadDataset(dsName, page, false, subIndex); // load then go to page
   }
 }
 
@@ -205,7 +206,7 @@ function showHome() {
 // ═══════════════════════════════════════════
 // LOAD DATASET
 // ═══════════════════════════════════════════
-function loadDataset(name, targetPage = 'dataset', pushNav = true) {
+function loadDataset(name, targetPage = 'dataset', pushNav = true, subIndex = 0) {
   showLoader(true, `Loading "${name}"…`);
 
   Promise.all([
@@ -238,7 +239,7 @@ function loadDataset(name, targetPage = 'dataset', pushNav = true) {
       loadedMain = 0;
       syncSelUI();
       switchView('explorer-view');
-      switchPage(targetPage, pushNav);
+      switchPage(targetPage, pushNav, subIndex);
       showLoader(false);
       loadBatchMain();
     })
@@ -248,7 +249,7 @@ function loadDataset(name, targetPage = 'dataset', pushNav = true) {
 // ═══════════════════════════════════════════
 // PAGE SWITCH
 // ═══════════════════════════════════════════
-function switchPage(p, pushNav = true) {
+function switchPage(p, pushNav = true, subIndex = 0) {
   currentPage = p;
   ['dataset', 'class', 'annotation', 'annotate2', 'categorize', 'auto', 'update', 'settings'].forEach(n => {
     const el = document.getElementById(`nav-${n}`);
@@ -285,7 +286,13 @@ function switchPage(p, pushNav = true) {
   }
 
   // Update URL
-  if (ds) navigate(`/${enc(ds.name)}/${p}`, !pushNav);
+  if (ds) {
+    if (p === 'annotate2') {
+      navigate(`/${enc(ds.name)}/${p}/${subIndex}`, !pushNav);
+    } else {
+      navigate(`/${enc(ds.name)}/${p}`, !pushNav);
+    }
+  }
   
   if (p === 'annotation' && ds) {
     if (!annData) {
@@ -306,7 +313,7 @@ function switchPage(p, pushNav = true) {
   
   if (p === 'annotate2' && ds) {
     if (annData && annData.images) {
-      if (window.initAnn2) initAnn2({ name: ds.name, classes: annData.classes }, annData.images);
+      if (window.initAnn2) initAnn2({ name: ds.name, classes: annData.classes }, annData.images, subIndex);
     } else {
       Promise.all([
         fetch(`/api/dataset/${enc(ds.name)}/annotate`).then(r => r.json()),
@@ -321,7 +328,7 @@ function switchPage(p, pushNav = true) {
           });
           annData = data;
           annData.images = images;
-          if (window.initAnn2) initAnn2({ name: ds.name, classes: data.classes }, images);
+          if (window.initAnn2) initAnn2({ name: ds.name, classes: data.classes }, images, subIndex);
         })
         .catch(() => toast('Gagal memuat annotate2', 'err'));
     }

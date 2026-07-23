@@ -67,10 +67,10 @@
   const MIN_BBOX = 0.005;
 
   // ── Public init ──
-  window.initAnn2 = function (dsState, imgList) {
+  window.initAnn2 = function (dsState, imgList, startIdx = 0) {
     _ds = dsState;
     _images = imgList || [];
-    _idx = 0;
+    _idx = Math.max(0, Math.min(startIdx, _images.length - 1));
     _buildClassSel();
 
     // Fetch settings first to configure tools based on Dataset Type
@@ -78,7 +78,7 @@
       _setTool('drag');
       _setupCanvas();
       _setupKeys();
-      if (_images.length > 0) _loadImg(0);
+      if (_images.length > 0) _loadImg(_idx);
       else _drawEmpty();
     });
   };
@@ -273,6 +273,9 @@
 
   async function _loadImg(idx) {
     _idx = Math.max(0, Math.min(idx, _images.length - 1));
+    if (_ds && typeof window.navigate === 'function') {
+      window.navigate(`/${encodeURIComponent(_ds.name)}/annotate2/${_idx}`, true);
+    }
     _tempAutoAnns = [];
     _tempAnnSelectedVertex = -1;
     _activeSimplifyTargetKey = null;
