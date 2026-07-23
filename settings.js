@@ -11,43 +11,70 @@ function loadLLMSettings() {
       document.getElementById('set-model').value = s.model || '';
       const dsTypeSel = document.getElementById('set-dataset-type');
       if (dsTypeSel) dsTypeSel.value = s.dataset_type || 'object_detection';
+      const autoLayeringChk = document.getElementById('set-auto-layering');
+      if (autoLayeringChk) autoLayeringChk.checked = !!s.auto_layering;
     })
     .catch(() => { });
   checkSamModelStatus();
 }
 
-function saveLLMSettings() {
-  const dsTypeSel = document.getElementById('set-dataset-type');
-  const payload = {
-    api_url: document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234',
-    api_key: document.getElementById('set-api-key').value.trim(),
-    model: document.getElementById('set-model').value.trim(),
-    dataset_type: dsTypeSel ? dsTypeSel.value : 'object_detection'
-  };
-  fetch('/api/llm-settings', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-    .then(r => r.json())
-    .then(d => { if (d.success) toast('Settings tersimpan!'); })
-    .catch(e => toast(`Error: ${e.message}`, 'err'));
+async function saveLLMSettings() {
+  try {
+    const r = await fetch('/api/llm-settings');
+    const s = r.ok ? await r.json() : {};
+    
+    s.api_url = document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234';
+    s.api_key = document.getElementById('set-api-key').value.trim();
+    s.model = document.getElementById('set-model').value.trim();
+    const dsTypeSel = document.getElementById('set-dataset-type');
+    if (dsTypeSel) s.dataset_type = dsTypeSel.value;
+    
+    const r2 = await fetch('/api/llm-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s)
+    });
+    const d = await r2.json();
+    if (d.success) toast('Settings tersimpan!');
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'err');
+  }
 }
 
-function saveDatasetSettings() {
-  const dsTypeSel = document.getElementById('set-dataset-type');
-  const payload = {
-    api_url: document.getElementById('set-api-url').value.trim() || 'http://127.0.0.1:1234',
-    api_key: document.getElementById('set-api-key').value.trim(),
-    model: document.getElementById('set-model').value.trim(),
-    dataset_type: dsTypeSel ? dsTypeSel.value : 'object_detection'
-  };
-  fetch('/api/llm-settings', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-    .then(r => r.json())
-    .then(d => { if (d.success) toast('Dataset settings berhasil disimpan!'); })
-    .catch(e => toast(`Error: ${e.message}`, 'err'));
+async function saveDatasetSettings() {
+  try {
+    const r = await fetch('/api/llm-settings');
+    const s = r.ok ? await r.json() : {};
+    
+    const dsTypeSel = document.getElementById('set-dataset-type');
+    if (dsTypeSel) s.dataset_type = dsTypeSel.value;
+    
+    const r2 = await fetch('/api/llm-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(s)
+    });
+    const d = await r2.json();
+    if (d.success) toast('Dataset settings berhasil disimpan!');
+  } catch (e) {
+    toast(`Error: ${e.message}`, 'err');
+  }
+}
+
+async function toggleAutoLayering(checked) {
+  try {
+    const r = await fetch('/api/llm-settings');
+    if (r.ok) {
+      const s = await r.json();
+      s.auto_layering = checked;
+      await fetch('/api/llm-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(s)
+      });
+      toast('Auto layering updated!');
+    }
+  } catch (e) {
+    toast(`Failed to update auto layering: ${e.message}`, 'err');
+  }
 }
 
 function checkDataset() {

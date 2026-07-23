@@ -50,7 +50,10 @@ def init_db():
             recheck_device TEXT DEFAULT 'cuda:0',
             recheck_min_area REAL DEFAULT 0.70,
             recheck_max_area REAL DEFAULT 1.20,
-            recheck_imgsz INTEGER DEFAULT 1024
+            recheck_imgsz INTEGER DEFAULT 1024,
+            magic_model TEXT DEFAULT 'sam3',
+            magic_device TEXT DEFAULT 'cuda:0',
+            magic_imgsz INTEGER DEFAULT 1024
         );
     """)
     # Add columns if migrating an existing DB
@@ -90,6 +93,18 @@ def init_db():
         cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_imgsz INTEGER DEFAULT 1024;")
     except sqlite3.OperationalError:
         pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN magic_model TEXT DEFAULT 'sam3';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN magic_device TEXT DEFAULT 'cuda:0';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN magic_imgsz INTEGER DEFAULT 1024;")
+    except sqlite3.OperationalError:
+        pass
 
     # Create LLM Settings table
     cursor.execute("""
@@ -98,13 +113,24 @@ def init_db():
             api_url TEXT DEFAULT 'http://127.0.0.1:1234',
             api_key TEXT DEFAULT '',
             model TEXT DEFAULT '',
-            dataset_type TEXT DEFAULT 'object_detection'
+            dataset_type TEXT DEFAULT 'object_detection',
+            autosave INTEGER DEFAULT 0,
+            auto_layering INTEGER DEFAULT 0
         );
     """)
+    try:
+        cursor.execute("ALTER TABLE llm_settings ADD COLUMN autosave INTEGER DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE llm_settings ADD COLUMN auto_layering INTEGER DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+
     # Insert default row if not exists
     cursor.execute("""
-        INSERT OR IGNORE INTO llm_settings (id, api_url, api_key, model, dataset_type)
-        VALUES (1, 'http://127.0.0.1:1234', '', '', 'object_detection');
+        INSERT OR IGNORE INTO llm_settings (id, api_url, api_key, model, dataset_type, autosave, auto_layering)
+        VALUES (1, 'http://127.0.0.1:1234', '', '', 'object_detection', 0, 0);
     """)
 
     # Try migration from JSON to DB
@@ -183,6 +209,9 @@ class AutoAnnotateSettingsUpdate(BaseModel):
     recheck_min_area: Optional[float] = 0.70
     recheck_max_area: Optional[float] = 1.20
     recheck_imgsz: Optional[int] = 1024
+    magic_model: Optional[str] = 'sam3'
+    magic_device: Optional[str] = 'cuda:0'
+    magic_imgsz: Optional[int] = 1024
 
 class SamAutoAnnotateRequest(BaseModel):
     filename: str
@@ -204,6 +233,7 @@ class LLMSettings(BaseModel):
     model: Optional[str] = ""
     dataset_type: Optional[str] = "object_detection"
     autosave: Optional[bool] = False
+    auto_layering: Optional[bool] = False
 
 class MoveImagesRequest(BaseModel):
     filenames: List[str]
@@ -843,7 +873,7 @@ def get_delete_class_progress(dataset_name: str, class_id: int):
 def get_llm_settings():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT api_url, api_key, model, dataset_type FROM llm_settings WHERE id = 1;")
+    cursor.execute("SELECT api_url, api_key, model, dataset_type, autosave, auto_layering FROM llm_settings WHERE id = 1;")
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -851,18 +881,20 @@ def get_llm_settings():
             "api_url": row[0],
             "api_key": row[1],
             "model": row[2],
-            "dataset_type": row[3]
+            "dataset_type": row[3],
+            "autosave": bool(row[4]) if row[4] is not None else False,
+            "auto_layering": bool(row[5]) if row[5] is not None else False
         }
-    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection"}
+    return {"api_url": "http://127.0.0.1:1234", "api_key": "", "model": "", "dataset_type": "object_detection", "autosave": False, "auto_layering": False}
 
 @app.post("/api/llm-settings")
 def save_llm_settings(settings: LLMSettings):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT OR REPLACE INTO llm_settings (id, api_url, api_key, model, dataset_type)
-        VALUES (1, ?, ?, ?, ?);
-    """, (settings.api_url, settings.api_key, settings.model, settings.dataset_type))
+        INSERT OR REPLACE INTO llm_settings (id, api_url, api_key, model, dataset_type, autosave, auto_layering)
+        VALUES (1, ?, ?, ?, ?, ?, ?);
+    """, (settings.api_url, settings.api_key, settings.model, settings.dataset_type, int(settings.autosave), int(settings.auto_layering)))
     conn.commit()
     conn.close()
     return {"success": True}
@@ -954,6 +986,9 @@ def move_images_to_annotate(dataset_name: str, payload: MoveImagesRequest):
 class SamPredictRequest(BaseModel):
     filename: str
     points: list   # [{"x": float, "y": float, "label": int}, ...]  label=1 positive, label=0 negative
+    model: Optional[str] = 'sam3'
+    device: Optional[str] = 'cuda:0'
+    imgsz: Optional[int] = 1024
 
 # Lazy singleton models – loaded once, reused across requests
 _sam_models = {}
@@ -1042,7 +1077,8 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
         import cv2
         import numpy as np
 
-        model = _get_sam_model('sam3')
+        model_name = payload.model if payload.model in ('sam3', 'sam2.1_l') else 'sam3'
+        model = _get_sam_model(model_name)
 
         # Read image to get dimensions
         img = cv2.imread(image_path)
@@ -1058,8 +1094,9 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
             image_path, 
             points=[pt_coords], 
             labels=[pt_labels], 
-            device="cuda", 
-            imgsz=max(h, w)
+            device=payload.device if payload.device else "cuda:0", 
+            imgsz=payload.imgsz if (payload.imgsz and payload.imgsz > 0) else max(h, w),
+            verbose=False
         )
 
         if not results or results[0].masks is None or len(results[0].masks) == 0:
@@ -1103,7 +1140,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 def get_auto_annotate_settings(dataset_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -1119,9 +1156,12 @@ def get_auto_annotate_settings(dataset_name: str):
             "recheck_device": row[8] if row[8] is not None else 'cuda:0',
             "recheck_min_area": row[9] if row[9] is not None else 0.70,
             "recheck_max_area": row[10] if row[10] is not None else 1.20,
-            "recheck_imgsz": row[11] if row[11] is not None else 1024
+            "recheck_imgsz": row[11] if row[11] is not None else 1024,
+            "magic_model": row[12] if row[12] is not None else 'sam3',
+            "magic_device": row[13] if row[13] is not None else 'cuda:0',
+            "magic_imgsz": row[14] if row[14] is not None else 1024
         }
-    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20, "recheck_imgsz": 1024}
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20, "recheck_imgsz": 1024, "magic_model": "sam3", "magic_device": "cuda:0", "magic_imgsz": 1024}
 
 
 @app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
@@ -1129,8 +1169,8 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dataset_name) DO UPDATE SET 
             model=excluded.model, 
             prompts=excluded.prompts, 
@@ -1143,8 +1183,11 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
             recheck_device=excluded.recheck_device,
             recheck_min_area=excluded.recheck_min_area,
             recheck_max_area=excluded.recheck_max_area,
-            recheck_imgsz=excluded.recheck_imgsz;
-    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area, payload.recheck_imgsz))
+            recheck_imgsz=excluded.recheck_imgsz,
+            magic_model=excluded.magic_model,
+            magic_device=excluded.magic_device,
+            magic_imgsz=excluded.magic_imgsz;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area, payload.recheck_imgsz, payload.magic_model, payload.magic_device, payload.magic_imgsz))
     conn.commit()
     conn.close()
     return {"success": True}

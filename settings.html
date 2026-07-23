@@ -16,6 +16,15 @@
   
   <hr class="settings-divider">
 
+  <h2>Annotate Settings</h2>
+  <p>Konfigurasi Annotation editor.</p>
+  <div class="setting-group" style="display:flex; align-items:center; gap:10px; margin-bottom: 24px;">
+    <input type="checkbox" id="set-auto-layering" onchange="toggleAutoLayering(this.checked)" style="width:18px; height:18px; cursor:pointer; margin:0;">
+    <label for="set-auto-layering" style="font-size:.95rem; color:var(--text-primary); cursor:pointer; user-select:none;">Auto Layering (Bawa anotasi yang lebih kecil ke atas saat tumpang tindih)</label>
+  </div>
+
+  <hr class="settings-divider">
+
   <h2>LLM Settings</h2>
   <p>Konfigurasi OpenAI-compatible API endpoint untuk fitur Categorize.</p>
   <div class="setting-group">

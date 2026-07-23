@@ -79,7 +79,13 @@ async function loadPartials() {
       const scripts = container.querySelectorAll('script');
       scripts.forEach(oldScript => {
         const newScript = document.createElement('script');
-        Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+        Array.from(oldScript.attributes).forEach(attr => {
+          let val = attr.value;
+          if (attr.name === 'src' && !val.includes('?')) {
+            val += `?t=${Date.now()}`;
+          }
+          newScript.setAttribute(attr.name, val);
+        });
         newScript.appendChild(document.createTextNode(oldScript.innerHTML));
         oldScript.parentNode.replaceChild(newScript, oldScript);
       });

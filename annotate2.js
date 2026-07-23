@@ -13,6 +13,7 @@
   let _curTags = [];
   let _datasetType = 'object_detection'; // default setting
   let _autosave = false;
+  let _autoLayering = false;
   let _hoverIdx = -1;
 
   // Magic Selection state
@@ -37,6 +38,8 @@
   let _tempAnnOrigPts = null;   // original points of selected temp ann before simplify preview
   let _settingsDirty = false;
   let _settingsSnapshot = null;  // deep clone at time of open, for cancel-revert
+  let _magicSettingsDirty = false;
+  let _magicSettingsSnapshot = null;
 
   // Canvas transform
   let _pan = { x: 0, y: 0 };
@@ -87,6 +90,7 @@
         const s = await r.json();
         _datasetType = s.dataset_type || 'object_detection';
         _autosave = !!s.autosave;
+        _autoLayering = !!s.auto_layering;
         const chk = document.getElementById('ann2-autosave-chk');
         if (chk) chk.checked = _autosave;
       }
@@ -231,6 +235,42 @@
   }
 
   // ── Image Loading ──
+  function _getAnnArea(ann) {
+    if (ann.type === 'bbox') {
+      if (ann.points.length < 2) return 0;
+      const [[x1, y1], [x2, y2]] = ann.points;
+      return Math.abs(x2 - x1) * Math.abs(y2 - y1);
+    } else if (ann.type === 'polygon') {
+      let area = 0;
+      const pts = ann.points;
+      const n = pts.length;
+      for (let i = 0; i < n; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % n];
+        area += p1[0] * p2[1] - p2[0] * p1[1];
+      }
+      return Math.abs(area) / 2;
+    }
+    return 0;
+  }
+
+  function _applyAutoLayering() {
+    if (!_autoLayering || _anns.length <= 1) return;
+    const originalOrder = _anns.map((a, i) => ({ ann: a, index: i, area: _getAnnArea(a) }));
+    const sortedOrder = [...originalOrder].sort((a, b) => a.area - b.area);
+    let changed = false;
+    for (let i = 0; i < sortedOrder.length; i++) {
+      if (sortedOrder[i].index !== i) {
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      _anns = sortedOrder.map(o => o.ann);
+      ann2Save();
+    }
+  }
+
   async function _loadImg(idx) {
     _idx = Math.max(0, Math.min(idx, _images.length - 1));
     _tempAutoAnns = [];
@@ -247,6 +287,7 @@
       type: a.points.length === 2 ? 'bbox' : 'polygon',
       locked: false
     }));
+    _applyAutoLayering();
     _selIdx = -1;
     const ctr = document.getElementById('ann2-img-counter');
     if (ctr) ctr.textContent = `${_idx + 1} / ${_images.length}`;
@@ -424,10 +465,14 @@
     const c = document.getElementById('ann2-canvas');
     if (c) c.style.cursor = t === 'grab' ? 'grab' : 'crosshair';
 
+    const autoAnnLabel = document.getElementById('ann2-auto-annotate-label');
     const settingsBtn = document.getElementById('ann2-settings-btn');
     const iouBtn = document.getElementById('ann2-iou-toggle');
+    const magicSettingsBtn = document.getElementById('ann2-magic-settings-btn');
+    if (autoAnnLabel) autoAnnLabel.style.display = (t === 'autoann') ? 'flex' : 'none';
     if (settingsBtn) settingsBtn.style.display = (t === 'autoann') ? 'flex' : 'none';
     if (iouBtn) iouBtn.style.display = (t === 'autoann') ? 'flex' : 'none';
+    if (magicSettingsBtn) magicSettingsBtn.style.display = (t === 'magic') ? 'flex' : 'none';
 
     if (t === 'autoann') {
       const chk = document.getElementById('ann2-auto-annotate-chk');
@@ -437,6 +482,12 @@
       ann2OpenAutoSettingsModal();
     } else {
       ann2CloseAutoSettingsModal();
+    }
+
+    if (t === 'magic') {
+      ann2OpenMagicSettingsModal();
+    } else {
+      ann2CloseMagicSettingsModal();
     }
     _updateShortcutHints();
     _redraw();
@@ -909,7 +960,13 @@
       const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-predict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: imgObj.filename, points: _magicPts })
+        body: JSON.stringify({
+          filename: imgObj.filename,
+          points: _magicPts,
+          model: _autoAnnotateSettings.magic_model || 'sam3',
+          device: _autoAnnotateSettings.magic_device || 'cuda:0',
+          imgsz: _autoAnnotateSettings.magic_imgsz !== undefined ? _autoAnnotateSettings.magic_imgsz : 1024
+        })
       });
       const data = await resp.json();
       if (resp.ok && data.success && data.polygons && data.polygons.length > 0) {
@@ -1492,6 +1549,100 @@
     if (panel) panel.style.display = 'none';
   };
 
+  window.ann2OpenMagicSettingsModal = function () {
+    const panel = document.getElementById('ann2-magic-settings-modal');
+    if (!panel) return;
+    panel.style.display = 'flex';
+    _magicSettingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
+    _loadAutoSettings();
+  };
+
+  window.ann2CloseMagicSettingsModal = function () {
+    const panel = document.getElementById('ann2-magic-settings-modal');
+    if (panel) panel.style.display = 'none';
+  };
+
+  window.ann2StartMagicSettingsDrag = function (e) {
+    if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+    const panel = document.getElementById('ann2-magic-settings-modal');
+    if (!panel) return;
+    e.preventDefault();
+    panel.classList.add('is-dragging');
+    const startX = e.clientX - panel.offsetLeft;
+    const startY = e.clientY - panel.offsetTop;
+    panel.style.right = 'auto';
+    panel.style.left = panel.offsetLeft + 'px';
+    panel.style.top  = panel.offsetTop  + 'px';
+    function onMove(ev) {
+      let nx = ev.clientX - startX;
+      let ny = ev.clientY - startY;
+      nx = Math.max(0, Math.min(nx, window.innerWidth  - panel.offsetWidth));
+      ny = Math.max(0, Math.min(ny, window.innerHeight - panel.offsetHeight));
+      panel.style.left = nx + 'px';
+      panel.style.top  = ny + 'px';
+    }
+    function onUp() {
+      panel.classList.remove('is-dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  };
+
+  window.ann2MarkMagicSettingsDirty = function () {
+    _magicSettingsDirty = true;
+    const btn = document.getElementById('ann2-save-magic-settings-btn');
+    if (btn) { btn.disabled = false; }
+  };
+
+  function _markMagicSettingsClean() {
+    _magicSettingsDirty = false;
+    const btn = document.getElementById('ann2-save-magic-settings-btn');
+    if (btn) { btn.disabled = true; }
+  }
+
+  window.ann2SaveMagicSettings = async function () {
+    if (!_ds) return;
+    const magic_model = document.getElementById('ann2-magic-model')?.value || 'sam3';
+    const magic_device = document.getElementById('ann2-magic-device')?.value || 'cuda:0';
+    const magic_imgsz = parseInt(document.getElementById('ann2-magic-imgsz')?.value) || 1024;
+
+    _autoAnnotateSettings.magic_model = magic_model;
+    _autoAnnotateSettings.magic_device = magic_device;
+    _autoAnnotateSettings.magic_imgsz = magic_imgsz;
+
+    try {
+      await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_autoAnnotateSettings)
+      });
+      _magicSettingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
+      _markMagicSettingsClean();
+      if (window.toast) toast('Settings Magic disimpan ✓');
+    } catch (e) {
+      if (window.toast) toast('Gagal menyimpan settings magic', 'err');
+    }
+  };
+
+  window.ann2CancelMagicSettings = function () {
+    if (_magicSettingsSnapshot) {
+      _autoAnnotateSettings = JSON.parse(JSON.stringify(_magicSettingsSnapshot));
+      _renderMagicSettingsPanel();
+    }
+    _markMagicSettingsClean();
+  };
+
+  function _renderMagicSettingsPanel() {
+    const modelSel = document.getElementById('ann2-magic-model');
+    if (modelSel) modelSel.value = _autoAnnotateSettings.magic_model || 'sam3';
+    const deviceSel = document.getElementById('ann2-magic-device');
+    if (deviceSel) deviceSel.value = _autoAnnotateSettings.magic_device || 'cuda:0';
+    const imgszInput = document.getElementById('ann2-magic-imgsz');
+    if (imgszInput) imgszInput.value = _autoAnnotateSettings.magic_imgsz !== undefined ? _autoAnnotateSettings.magic_imgsz : 1024;
+  }
+
   // Toggle auto annotate mode
   window.ann2ToggleAutoAnnotate = function (checked) {
     _autoAnnotateActive = checked;
@@ -1645,7 +1796,7 @@
       if (gr.ok) {
         const gd = await gr.json();
         const gpus = gd.gpus || [];
-        ['ann2-auto-device', 'ann2-recheck-device'].forEach(id => {
+        ['ann2-auto-device', 'ann2-recheck-device', 'ann2-magic-device'].forEach(id => {
           const sel = document.getElementById(id);
           if (!sel) return;
           sel.innerHTML = gpus.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
@@ -1654,9 +1805,12 @@
     } catch (e) { console.warn('Could not fetch GPU list', e); }
 
     _renderAutoSettingsPanel();
+    _renderMagicSettingsPanel();
     // Freshly loaded from server = clean state
     _settingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
+    _magicSettingsSnapshot = JSON.parse(JSON.stringify(_autoAnnotateSettings));
     _markSettingsClean();
+    _markMagicSettingsClean();
   }
 
   function _renderAutoSettingsPanel() {
