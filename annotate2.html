@@ -50,13 +50,13 @@
         </svg>
         Auto Annotate
       </label>
-      <button class="btn btn-ghost" onclick="ann2OpenAutoSettingsModal()" title="Auto Annotate Settings"
-        style="padding:3px 7px; font-size:.75rem; border-radius:5px; color:#a855f7; border:1px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.1); display:flex; align-items:center; gap:4px; cursor:pointer;">
+      <button class="btn btn-ghost" id="ann2-settings-btn" onclick="ann2OpenAutoSettingsModal()" title="Auto Annotate Settings"
+        style="padding:3px 7px; font-size:.75rem; border-radius:5px; color:#a855f7; border:1px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.1); display:none; align-items:center; gap:4px; cursor:pointer;">
         ⚙ Settings
       </button>
       <!-- IOU Rejected Toggle -->
       <button id="ann2-iou-toggle" onclick="ann2ToggleIouRejected()" title="Show/hide annotations rejected due to IoU overlap"
-        style="padding:3px 8px; font-size:.72rem; border-radius:5px; border:1px solid rgba(239,68,68,0.3); background:rgba(239,68,68,0.08); color:#f87171; display:flex; align-items:center; gap:4px; cursor:pointer; transition:all .15s; white-space:nowrap;">
+        style="padding:3px 8px; font-size:.72rem; border-radius:5px; border:1px solid rgba(239,68,68,0.3); background:rgba(239,68,68,0.08); color:#f87171; display:none; align-items:center; gap:4px; cursor:pointer; transition:all .15s; white-space:nowrap;">
         <svg viewBox="0 0 24 24" style="width:11px;height:11px;fill:currentColor;flex-shrink:0"><path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7Z"/></svg>
         IoU
       </button>
@@ -307,6 +307,13 @@
               style="flex:1; accent-color:#a855f7; cursor:pointer;"
               oninput="ann2MarkSettingsDirty(); document.getElementById('ann2-recheck-max-val').textContent=this.value+'%'">
             <span id="ann2-recheck-max-val" style="font-size:.78rem; color:#c4b5fd; min-width:34px; text-align:right;">120%</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:.78rem; color:var(--text-secondary); min-width:54px;">Image Size</span>
+            <input type="number" id="ann2-recheck-imgsz" min="64" max="4096" value="1024" step="64"
+              style="padding:4px 8px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:.78rem; width:80px; box-sizing:border-box;"
+              oninput="ann2MarkSettingsDirty()">
+            <span style="font-size:.72rem; color:var(--text-muted); flex:1; text-align:left;">px</span>
           </div>
         </div>
       </div>

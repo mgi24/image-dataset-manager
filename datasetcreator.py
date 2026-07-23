@@ -49,7 +49,8 @@ def init_db():
             recheck_model TEXT DEFAULT 'sam3',
             recheck_device TEXT DEFAULT 'cuda:0',
             recheck_min_area REAL DEFAULT 0.70,
-            recheck_max_area REAL DEFAULT 1.20
+            recheck_max_area REAL DEFAULT 1.20,
+            recheck_imgsz INTEGER DEFAULT 1024
         );
     """)
     # Add columns if migrating an existing DB
@@ -83,6 +84,10 @@ def init_db():
         pass
     try:
         cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_device TEXT DEFAULT 'cuda:0';")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN recheck_imgsz INTEGER DEFAULT 1024;")
     except sqlite3.OperationalError:
         pass
 
@@ -177,6 +182,7 @@ class AutoAnnotateSettingsUpdate(BaseModel):
     recheck_device: Optional[str] = 'cuda:0'
     recheck_min_area: Optional[float] = 0.70
     recheck_max_area: Optional[float] = 1.20
+    recheck_imgsz: Optional[int] = 1024
 
 class SamAutoAnnotateRequest(BaseModel):
     filename: str
@@ -190,6 +196,7 @@ class SamAutoAnnotateRequest(BaseModel):
     recheck_device: Optional[str] = 'cuda:0'
     recheck_min_area: Optional[float] = 0.70
     recheck_max_area: Optional[float] = 1.20
+    recheck_imgsz: Optional[int] = 1024
 
 class LLMSettings(BaseModel):
     api_url: str
@@ -1096,7 +1103,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 def get_auto_annotate_settings(dataset_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -1111,9 +1118,10 @@ def get_auto_annotate_settings(dataset_name: str):
             "recheck_model": row[7] if row[7] is not None else 'sam3',
             "recheck_device": row[8] if row[8] is not None else 'cuda:0',
             "recheck_min_area": row[9] if row[9] is not None else 0.70,
-            "recheck_max_area": row[10] if row[10] is not None else 1.20
+            "recheck_max_area": row[10] if row[10] is not None else 1.20,
+            "recheck_imgsz": row[11] if row[11] is not None else 1024
         }
-    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20}
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20, "recheck_imgsz": 1024}
 
 
 @app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
@@ -1121,8 +1129,8 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dataset_name) DO UPDATE SET 
             model=excluded.model, 
             prompts=excluded.prompts, 
@@ -1134,8 +1142,9 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
             recheck_model=excluded.recheck_model,
             recheck_device=excluded.recheck_device,
             recheck_min_area=excluded.recheck_min_area,
-            recheck_max_area=excluded.recheck_max_area;
-    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area))
+            recheck_max_area=excluded.recheck_max_area,
+            recheck_imgsz=excluded.recheck_imgsz;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area, payload.recheck_imgsz))
     conn.commit()
     conn.close()
     return {"success": True}
@@ -1296,7 +1305,7 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
                                 points=[[cX, cY]],
                                 labels=[1],
                                 device=payload.recheck_device if payload.recheck_device else 'cuda:0',
-                                imgsz=max(h, w),
+                                imgsz=payload.recheck_imgsz if (payload.recheck_imgsz and payload.recheck_imgsz > 0) else max(h, w),
                                 verbose=False
                             )
                         if sam_results and sam_results[0].masks is not None and len(sam_results[0].masks) > 0:

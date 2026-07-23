@@ -23,7 +23,7 @@
 
   // Auto Annotate state
   let _autoAnnotateActive = false;
-  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [], conf: 0.25, iou: 0.85 };
+  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [], conf: 0.25, iou: 0.85, recheck_imgsz: 1024 };
   let _autoProcessing = false;
   let _autoApprovedTags = [];  // local editable copy for panel
   let _tempAutoAnns = [];      // temporary scan-only polygons for preview
@@ -423,6 +423,11 @@
     if (btn) btn.classList.add('active-tool');
     const c = document.getElementById('ann2-canvas');
     if (c) c.style.cursor = t === 'grab' ? 'grab' : 'crosshair';
+
+    const settingsBtn = document.getElementById('ann2-settings-btn');
+    const iouBtn = document.getElementById('ann2-iou-toggle');
+    if (settingsBtn) settingsBtn.style.display = (t === 'autoann') ? 'flex' : 'none';
+    if (iouBtn) iouBtn.style.display = (t === 'autoann') ? 'flex' : 'none';
 
     if (t === 'autoann') {
       const chk = document.getElementById('ann2-auto-annotate-chk');
@@ -1684,15 +1689,17 @@
     const recheckDeviceSel = document.getElementById('ann2-recheck-device');
     if (recheckDeviceSel) recheckDeviceSel.value = _autoAnnotateSettings.recheck_device || 'cuda:0';
 
-    // Recheck Threshold Sliders
+    // Recheck Threshold Sliders & Image Size
     const recheckMinSlider = document.getElementById('ann2-recheck-min-slider');
     const recheckMinVal = document.getElementById('ann2-recheck-min-val');
     const recheckMaxSlider = document.getElementById('ann2-recheck-max-slider');
     const recheckMaxVal = document.getElementById('ann2-recheck-max-val');
+    const recheckImgszInput = document.getElementById('ann2-recheck-imgsz');
     const minPct = Math.round((_autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70) * 100);
     const maxPct = Math.round((_autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20) * 100);
     if (recheckMinSlider) { recheckMinSlider.value = minPct; if (recheckMinVal) recheckMinVal.textContent = minPct + '%'; }
     if (recheckMaxSlider) { recheckMaxSlider.value = maxPct; if (recheckMaxVal) recheckMaxVal.textContent = maxPct + '%'; }
+    if (recheckImgszInput) { recheckImgszInput.value = _autoAnnotateSettings.recheck_imgsz !== undefined ? _autoAnnotateSettings.recheck_imgsz : 1024; }
 
     // Prompts
     const container = document.getElementById('ann2-auto-prompts');
@@ -1869,8 +1876,9 @@
     const recheck_device = document.getElementById('ann2-recheck-device')?.value || 'cuda:0';
     const recheck_min_area = parseFloat(document.getElementById('ann2-recheck-min-slider')?.value || 70) / 100;
     const recheck_max_area = parseFloat(document.getElementById('ann2-recheck-max-slider')?.value || 120) / 100;
+    const recheck_imgsz = parseInt(document.getElementById('ann2-recheck-imgsz')?.value) || 1024;
 
-    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area };
+    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz };
 
     try {
       await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
@@ -1963,7 +1971,8 @@
           recheck_model: _autoAnnotateSettings.recheck_model || 'sam3',
           recheck_device: _autoAnnotateSettings.recheck_device || 'cuda:0',
           recheck_min_area: _autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70,
-          recheck_max_area: _autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20
+          recheck_max_area: _autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20,
+          recheck_imgsz: _autoAnnotateSettings.recheck_imgsz !== undefined ? _autoAnnotateSettings.recheck_imgsz : 1024
         })
       });
       const data = await resp.json();
