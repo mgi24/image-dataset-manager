@@ -53,10 +53,15 @@ def init_db():
             recheck_imgsz INTEGER DEFAULT 1024,
             magic_model TEXT DEFAULT 'sam3',
             magic_device TEXT DEFAULT 'cuda:0',
-            magic_imgsz INTEGER DEFAULT 1024
+            magic_imgsz INTEGER DEFAULT 1024,
+            yolo_entries TEXT DEFAULT '[]'
         );
     """)
     # Add columns if migrating an existing DB
+    try:
+        cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN yolo_entries TEXT DEFAULT '[]';")
+    except sqlite3.OperationalError:
+        pass
     try:
         cursor.execute("ALTER TABLE auto_annotate_settings ADD COLUMN conf REAL DEFAULT 0.25;")
     except sqlite3.OperationalError:
@@ -212,6 +217,7 @@ class AutoAnnotateSettingsUpdate(BaseModel):
     magic_model: Optional[str] = 'sam3'
     magic_device: Optional[str] = 'cuda:0'
     magic_imgsz: Optional[int] = 1024
+    yolo_entries: list = []
 
 class SamAutoAnnotateRequest(BaseModel):
     filename: str
@@ -241,6 +247,17 @@ class MoveImagesRequest(BaseModel):
 class SaveAnnotationsRequest(BaseModel):
     filename: str
     annotations: list
+
+class YoloClassPair(BaseModel):
+    yolo_class_id: int
+    ds_class_id: int
+
+class YoloDetectRequest(BaseModel):
+    filename: str
+    model: str = 'yolov26x'
+    conf: Optional[float] = 0.25
+    device: Optional[str] = 'cuda:0'
+    pairs: List[YoloClassPair] = []
 
 
 
@@ -998,6 +1015,21 @@ _sam_predictors = {}
 _sam_predictor_lock = threading.Lock()
 _sam_inference_lock = threading.Lock()
 
+_yolo_models = {}
+_yolo_model_lock = threading.Lock()
+
+def _get_yolo_model(model_name, model_path, device):
+    global _yolo_models
+    key = (model_name, device)
+    if key not in _yolo_models:
+        with _yolo_model_lock:
+            if key not in _yolo_models:
+                from ultralytics import YOLO
+                yolo = YOLO(model_path)
+                yolo.to(device)
+                _yolo_models[key] = yolo
+    return _yolo_models[key]
+
 def _download_model_file(url: str, output_path: str):
     import httpx
     print(f"Downloading model from {url} to {output_path}...")
@@ -1140,7 +1172,7 @@ def sam_predict(dataset_name: str, payload: SamPredictRequest):
 def get_auto_annotate_settings(dataset_name: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
+    cursor.execute("SELECT model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz, yolo_entries FROM auto_annotate_settings WHERE dataset_name = ?;", (dataset_name,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -1159,9 +1191,10 @@ def get_auto_annotate_settings(dataset_name: str):
             "recheck_imgsz": row[11] if row[11] is not None else 1024,
             "magic_model": row[12] if row[12] is not None else 'sam3',
             "magic_device": row[13] if row[13] is not None else 'cuda:0',
-            "magic_imgsz": row[14] if row[14] is not None else 1024
+            "magic_imgsz": row[14] if row[14] is not None else 1024,
+            "yolo_entries": json.loads(row[15]) if (len(row) > 15 and row[15] is not None) else []
         }
-    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20, "recheck_imgsz": 1024, "magic_model": "sam3", "magic_device": "cuda:0", "magic_imgsz": 1024}
+    return {"model": "sam3.1", "prompts": [], "on_approved_tags": [], "conf": 0.25, "iou": 0.85, "device": 'cuda:0', "recheck": False, "recheck_model": 'sam3', "recheck_device": 'cuda:0', "recheck_min_area": 0.70, "recheck_max_area": 1.20, "recheck_imgsz": 1024, "magic_model": "sam3", "magic_device": "cuda:0", "magic_imgsz": 1024, "yolo_entries": []}
 
 
 @app.post("/api/dataset/{dataset_name}/auto-annotate-settings")
@@ -1169,8 +1202,8 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO auto_annotate_settings (dataset_name, model, prompts, on_approved_tags, conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, magic_model, magic_device, magic_imgsz, yolo_entries)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dataset_name) DO UPDATE SET 
             model=excluded.model, 
             prompts=excluded.prompts, 
@@ -1186,8 +1219,9 @@ def save_auto_annotate_settings(dataset_name: str, payload: AutoAnnotateSettings
             recheck_imgsz=excluded.recheck_imgsz,
             magic_model=excluded.magic_model,
             magic_device=excluded.magic_device,
-            magic_imgsz=excluded.magic_imgsz;
-    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area, payload.recheck_imgsz, payload.magic_model, payload.magic_device, payload.magic_imgsz))
+            magic_imgsz=excluded.magic_imgsz,
+            yolo_entries=excluded.yolo_entries;
+    """, (dataset_name, payload.model, json.dumps(payload.prompts), json.dumps(payload.on_approved_tags), payload.conf, payload.iou, payload.device, int(payload.recheck), payload.recheck_model, payload.recheck_device, payload.recheck_min_area, payload.recheck_max_area, payload.recheck_imgsz, payload.magic_model, payload.magic_device, payload.magic_imgsz, json.dumps(payload.yolo_entries)))
     conn.commit()
     conn.close()
     return {"success": True}
@@ -1399,6 +1433,72 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
 
 
 
+@app.get("/api/yolo-model-names")
+def get_yolo_model_names(model: str):
+    model_file = f"{model}.pt"
+    model_path = os.path.join(BASE_DIR, model_file)
+    if not os.path.exists(model_path):
+        # Fallback to yolo11n.pt
+        model_path = 'yolo11n.pt'
+    try:
+        yolo = _get_yolo_model(model, model_path, device='cpu')
+        names = [yolo.names[i] for i in sorted(yolo.names.keys())]
+        return {"success": True, "names": names}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/dataset/{dataset_name}/yolo-detect")
+def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
+    dataset_path = safe_dataset_path(dataset_name)
+    image_path = None
+    for subdir in [os.path.join("annotate", "images"), "images"]:
+        candidate = os.path.normpath(os.path.join(dataset_path, subdir, payload.filename))
+        if candidate.startswith(os.path.normpath(DATASET_DIR)) and os.path.isfile(candidate):
+            image_path = candidate
+            break
+    if not image_path:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    try:
+        model_name = payload.model if payload.model else 'yolov26x'
+        model_file = f"{model_name}.pt"
+        model_path = os.path.join(BASE_DIR, model_file)
+        if not os.path.exists(model_path):
+            model_path = 'yolo11n.pt'
+
+        device = payload.device if payload.device else 'cuda:0'
+        yolo = _get_yolo_model(model_name, model_path, device)
+        results = yolo(image_path, conf=payload.conf, device=device)
+
+        annotations = []
+        if results and len(results) > 0:
+            result = results[0]
+            boxes = result.boxes
+            if boxes is not None:
+                pair_map = {p.yolo_class_id: p.ds_class_id for p in payload.pairs}
+                h, w = result.orig_shape
+
+                for box in boxes:
+                    cls_id = int(box.cls[0].item())
+                    if cls_id not in pair_map:
+                        continue
+
+                    xyxy = box.xyxy[0].cpu().numpy()
+                    x1 = float(xyxy[0]) / w
+                    y1 = float(xyxy[1]) / h
+                    x2 = float(xyxy[2]) / w
+                    y2 = float(xyxy[3]) / h
+
+                    annotations.append({
+                        "class_id": pair_map[cls_id],
+                        "points": [[x1, y1], [x2, y2]],
+                        "type": "bbox"
+                    })
+        return {"success": True, "annotations": annotations}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/gpu/list")
 def list_gpus():
     """List available CUDA GPUs."""
@@ -1420,22 +1520,26 @@ def list_gpus():
 
 @app.get("/api/sam/status")
 def get_sam_status():
-    global _sam_models, _sam_predictors
+    global _sam_models, _sam_predictors, _yolo_models
     loaded_point = list(_sam_models.keys())
     loaded_auto = list(_sam_predictors.keys())
+    loaded_yolo = [f"{k[0]} ({k[1]})" for k in _yolo_models.keys()]
     return {
         "success": True,
         "loaded_point_models": loaded_point,
-        "loaded_auto_models": loaded_auto
+        "loaded_auto_models": loaded_auto,
+        "loaded_yolo_models": loaded_yolo
     }
 
 @app.post("/api/sam/unload")
 def unload_sam_models():
-    global _sam_models, _sam_predictors
+    global _sam_models, _sam_predictors, _yolo_models
     with _sam_model_lock:
         _sam_models.clear()
     with _sam_predictor_lock:
         _sam_predictors.clear()
+    with _yolo_model_lock:
+        _yolo_models.clear()
     import gc
     gc.collect()
     try:

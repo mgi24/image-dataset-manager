@@ -222,9 +222,10 @@ async function checkSamModelStatus() {
 
     const loadedPoint = data.loaded_point_models || [];
     const loadedAuto = data.loaded_auto_models || [];
+    const loadedYolo = data.loaded_yolo_models || [];
 
-    if (loadedPoint.length === 0 && loadedAuto.length === 0) {
-      listEl.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Tidak ada model SAM yang aktif di memori.</span>';
+    if (loadedPoint.length === 0 && loadedAuto.length === 0 && loadedYolo.length === 0) {
+      listEl.innerHTML = '<span style="color: var(--text-muted); font-size: 0.85rem;">Tidak ada model SAM atau YOLO yang aktif di memori.</span>';
       if (unloadBtn) unloadBtn.disabled = true;
     } else {
       let html = '';
@@ -232,7 +233,10 @@ async function checkSamModelStatus() {
         html += `<div style="font-size: 0.85rem; color: var(--text-primary); margin-bottom: 4px;">Point Predictor: <code style="color: var(--accent-light); font-weight: 700;">${loadedPoint.join(', ')}</code></div>`;
       }
       if (loadedAuto.length > 0) {
-        html += `<div style="font-size: 0.85rem; color: var(--text-primary);">Auto Predictor: <code style="color: var(--accent-light); font-weight: 700;">${loadedAuto.join(', ')}</code></div>`;
+        html += `<div style="font-size: 0.85rem; color: var(--text-primary); margin-bottom: 4px;">Auto Predictor: <code style="color: var(--accent-light); font-weight: 700;">${loadedAuto.join(', ')}</code></div>`;
+      }
+      if (loadedYolo.length > 0) {
+        html += `<div style="font-size: 0.85rem; color: var(--text-primary);">YOLO Detector: <code style="color: #fdba74; font-weight: 700;">${loadedYolo.join(', ')}</code></div>`;
       }
       listEl.innerHTML = html;
       if (unloadBtn) unloadBtn.disabled = false;
@@ -250,7 +254,7 @@ async function unloadSamModels() {
     const r = await fetch('/api/sam/unload', { method: 'POST' });
     if (!r.ok) throw new Error('Failed to unload');
     const data = await r.json();
-    toast('Semua model SAM berhasil di-unload dari memori!');
+    toast('Semua model SAM & YOLO berhasil di-unload dari memori!');
     await checkSamModelStatus();
   } catch (e) {
     toast(`Gagal unload model: ${e.message}`, 'err');

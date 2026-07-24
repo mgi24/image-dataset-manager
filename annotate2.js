@@ -11,6 +11,7 @@
   let _tool = 'drag';
   let _tags = [];
   let _curTags = [];
+  let _originalTags = [];
   let _datasetType = 'object_detection'; // default setting
   let _autosave = false;
   let _autoLayering = false;
@@ -24,7 +25,7 @@
 
   // Auto Annotate state
   let _autoAnnotateActive = false;
-  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [], conf: 0.25, iou: 0.85, recheck_imgsz: 1024 };
+  let _autoAnnotateSettings = { model: 'sam3.1', prompts: [], on_approved_tags: [], conf: 0.25, iou: 0.85, recheck_imgsz: 1024, yolo_entries: [] };
   let _autoProcessing = false;
   let _autoApprovedTags = [];  // local editable copy for panel
   let _tempAutoAnns = [];      // temporary scan-only polygons for preview
@@ -40,6 +41,9 @@
   let _settingsSnapshot = null;  // deep clone at time of open, for cancel-revert
   let _magicSettingsDirty = false;
   let _magicSettingsSnapshot = null;
+  // YOLO model class cache: { modelKey: [classNames] }
+  let _yoloClassCache = {};
+  let _gpuList = [{ id: 'cuda:0', name: 'CUDA:0' }];
 
   // Canvas transform
   let _pan = { x: 0, y: 0 };
@@ -312,7 +316,13 @@
     try {
       const r = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/image-tags/${encodeURIComponent(filename)}`);
       _curTags = r.ok ? (await r.json()).tags || [] : [];
-    } catch (e) { _curTags = []; }
+      _originalTags = [..._curTags];
+      _updateTagsSaveBtnVisibility();
+    } catch (e) {
+      _curTags = [];
+      _originalTags = [];
+      _updateTagsSaveBtnVisibility();
+    }
   }
 
   function _fitImg() {
@@ -1402,7 +1412,11 @@
       chip.className = 'ann2-tag-chip';
       const t = document.createTextNode(tag);
       const btn = document.createElement('button');
-      btn.textContent = '×'; btn.onclick = () => { _curTags = _curTags.filter(x => x !== tag); _renderTagsArea(); };
+      btn.textContent = '×'; btn.onclick = () => {
+        _curTags = _curTags.filter(x => x !== tag);
+        _renderTagsArea();
+        _updateTagsSaveBtnVisibility();
+      };
       chip.appendChild(t); chip.appendChild(btn);
       area.appendChild(chip);
     });
@@ -1427,8 +1441,43 @@
     if (val && !_curTags.includes(val)) {
       _curTags.push(val);
       _renderTagsArea();
+      _updateTagsSaveBtnVisibility();
     }
     sel.value = '';
+  };
+
+  function _areTagsDirty() {
+    if (_curTags.length !== _originalTags.length) return true;
+    const setA = new Set(_curTags);
+    return !_originalTags.every(t => setA.has(t));
+  }
+
+  function _updateTagsSaveBtnVisibility() {
+    const btn = document.getElementById('ann2-tags-save-btn');
+    if (!btn) return;
+    btn.style.display = _areTagsDirty() ? 'block' : 'none';
+  }
+
+  window.ann2SaveTags = async function () {
+    if (!_ds || !_images.length) return;
+    const imgObj = _images[_idx];
+    try {
+      const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/image-tags`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filenames: [imgObj.filename], tags: _curTags })
+      });
+      if (resp.ok) {
+        _originalTags = [..._curTags];
+        _updateTagsSaveBtnVisibility();
+        if (window.toast) toast('Tags saved ✓');
+      } else {
+        if (window.toast) toast('Failed to save tags', 'err');
+      }
+    } catch (e) {
+      console.error('Failed to save tags', e);
+      if (window.toast) toast('Failed to save tags', 'err');
+    }
   };
 
   // ── Navigation ──
@@ -1798,11 +1847,11 @@
       const gr = await fetch('/api/gpu/list');
       if (gr.ok) {
         const gd = await gr.json();
-        const gpus = gd.gpus || [];
+        _gpuList = gd.gpus || [];
         ['ann2-auto-device', 'ann2-recheck-device', 'ann2-magic-device'].forEach(id => {
           const sel = document.getElementById(id);
           if (!sel) return;
-          sel.innerHTML = gpus.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+          sel.innerHTML = _gpuList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
         });
       }
     } catch (e) { console.warn('Could not fetch GPU list', e); }
@@ -1869,6 +1918,12 @@
 
     // Tags
     _renderAutoTagsArea();
+
+    // YOLO entries
+    _renderYoloEntries();
+
+    // Apply None-mode disabled states
+    requestAnimationFrame(() => ann2OnModelChange());
   }
 
   function _populateClassOptions(clsSel, selectedClassId) {
@@ -2034,8 +2089,9 @@
     const recheck_min_area = parseFloat(document.getElementById('ann2-recheck-min-slider')?.value || 70) / 100;
     const recheck_max_area = parseFloat(document.getElementById('ann2-recheck-max-slider')?.value || 120) / 100;
     const recheck_imgsz = parseInt(document.getElementById('ann2-recheck-imgsz')?.value) || 1024;
+    const yolo_entries = _collectYoloEntries();
 
-    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz };
+    _autoAnnotateSettings = { model, prompts, on_approved_tags: [..._autoApprovedTags], conf, iou, device, recheck, recheck_model, recheck_device, recheck_min_area, recheck_max_area, recheck_imgsz, yolo_entries };
 
     try {
       await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/auto-annotate-settings`, {
@@ -2062,6 +2118,372 @@
     }
     _markSettingsClean();
   };
+
+  // ── None model: disable/enable sections ──
+  window.ann2OnModelChange = function () {
+    const modelVal = document.getElementById('ann2-auto-model')?.value;
+    const isNone = modelVal === 'none';
+    const recheckSec = document.getElementById('ann2-recheck-section');
+    const promptsSec = document.getElementById('ann2-prompts-section');
+    if (recheckSec) {
+      if (isNone) {
+        recheckSec.classList.add('ann2-section-disabled');
+        // Uncheck recheck
+        const chk = document.getElementById('ann2-auto-recheck');
+        if (chk) { chk.checked = false; ann2ToggleRecheck(false); }
+      } else {
+        recheckSec.classList.remove('ann2-section-disabled');
+      }
+    }
+    if (promptsSec) {
+      if (isNone) {
+        promptsSec.classList.add('ann2-section-disabled');
+      } else {
+        promptsSec.classList.remove('ann2-section-disabled');
+      }
+    }
+  };
+
+  // ── YOLO model dropdown toggle ──
+  window.ann2ToggleYoloModelDropdown = function (e) {
+    e.stopPropagation();
+    const dd = document.getElementById('ann2-yolo-model-dropdown');
+    if (!dd) return;
+    const isOpen = dd.style.display !== 'none';
+    dd.style.display = isOpen ? 'none' : 'flex';
+  };
+
+  // Close YOLO dropdown on outside click
+  document.addEventListener('click', function (e) {
+    const dd = document.getElementById('ann2-yolo-model-dropdown');
+    const btn = document.getElementById('ann2-add-yolo-btn');
+    if (dd && btn && !btn.contains(e.target) && !dd.contains(e.target)) {
+      dd.style.display = 'none';
+    }
+  });
+
+  // Available YOLO models and their class names
+  const YOLO_MODELS = {
+    'yolov26x': {
+      label: 'YOLOv2 6X',
+      // COCO 80 class names (placeholder — fetched from server if available)
+      classes: null // will be fetched/cached
+    }
+  };
+
+  // Fetch YOLO model names from server (or use COCO defaults)
+  async function _fetchYoloNames(modelKey) {
+    if (_yoloClassCache[modelKey]) return _yoloClassCache[modelKey];
+    try {
+      const r = await fetch(`/api/yolo-model-names?model=${encodeURIComponent(modelKey)}`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d.names && d.names.length > 0) {
+          _yoloClassCache[modelKey] = d.names;
+          return d.names;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    // Fallback: COCO 80 names
+    const coco = [
+      'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+      'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+      'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+      'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+      'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+      'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+      'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
+      'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
+      'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+      'refrigerator','book','clock','vase','scissors','teddy bear','hair drier',
+      'toothbrush'
+    ];
+    _yoloClassCache[modelKey] = coco;
+    return coco;
+  }
+
+  // Add a new YOLO entry card
+  window.ann2AddYoloEntry = async function (modelKey, selectedDevice = 'cuda:0') {
+    // Close dropdown
+    const dd = document.getElementById('ann2-yolo-model-dropdown');
+    if (dd) dd.style.display = 'none';
+
+    const container = document.getElementById('ann2-yolo-entries');
+    if (!container) return;
+
+    const entryId = 'yolo-entry-' + Date.now();
+    const yoloNames = await _fetchYoloNames(modelKey);
+    const dsNames = _ds?.classes?.names || [];
+
+    const card = document.createElement('div');
+    card.className = 'ann2-yolo-entry';
+    card.dataset.model = modelKey;
+    card.id = entryId;
+
+    // ── Header: model dropdown + delete ──
+    const header = document.createElement('div');
+    header.className = 'ann2-yolo-entry-header';
+
+    const modelLbl = document.createElement('span');
+    modelLbl.style.cssText = 'font-size:.7rem;font-weight:700;color:#fb923c;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;';
+    modelLbl.textContent = '⬡ YOLO';
+
+    const modelSel = document.createElement('select');
+    modelSel.className = 'ann2-yolo-model-sel';
+    Object.entries(YOLO_MODELS).forEach(([k, v]) => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = v.label;
+      if (k === modelKey) o.selected = true;
+      modelSel.appendChild(o);
+    });
+    modelSel.onchange = async function () {
+      card.dataset.model = this.value;
+      // Refresh class pair dropdowns
+      const newNames = await _fetchYoloNames(this.value);
+      card.querySelectorAll('.ann2-yolo-yolo-sel').forEach(sel => {
+        const cur = sel.value;
+        _populateYoloClassSel(sel, newNames, cur);
+      });
+      ann2MarkSettingsDirty();
+    };
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'ann2-yolo-del-btn';
+    delBtn.title = 'Remove YOLO entry';
+    delBtn.textContent = '✕';
+    delBtn.onclick = () => { card.remove(); ann2MarkSettingsDirty(); };
+
+    header.append(modelLbl, modelSel, delBtn);
+
+    // Device selector row
+    const deviceRow = document.createElement('div');
+    deviceRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom: 2px;';
+    deviceRow.innerHTML = `
+      <span style="font-size:.72rem; color:var(--text-muted); white-space:nowrap; min-width:28px;">GPU</span>
+      <select class="ann2-yolo-device-sel" onchange="ann2MarkSettingsDirty()" style="flex:1; padding:4px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:.78rem; cursor:pointer;">
+      </select>
+    `;
+    const deviceSel = deviceRow.querySelector('.ann2-yolo-device-sel');
+    deviceSel.innerHTML = _gpuList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+    deviceSel.value = selectedDevice;
+
+    // ── Conf slider ──
+    const confId = entryId + '-conf-val';
+    const confRow = _makeYoloSliderRow('Conf', entryId + '-conf', confId, 1, 99, 25, '%');
+
+    // ── IoU slider ──
+    const iouId = entryId + '-iou-val';
+    const iouRow = _makeYoloSliderRow('IoU', entryId + '-iou', iouId, 1, 99, 45, '%');
+
+    // ── Class pairs area ──
+    const pairsLbl = document.createElement('div');
+    pairsLbl.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+    pairsLbl.innerHTML = `
+      <span style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">YOLO Class → Dataset Class</span>
+      <button onclick="ann2AddYoloPairRow(this)" style="font-size:.72rem;padding:2px 7px;border-radius:4px;border:1px solid rgba(251,146,60,0.3);background:rgba(251,146,60,0.08);color:#fb923c;cursor:pointer;">+ Pair</button>
+    `;
+
+    const pairsContainer = document.createElement('div');
+    pairsContainer.className = 'ann2-yolo-pairs';
+    pairsContainer.style.cssText = 'display:flex;flex-direction:column;gap:5px;';
+
+    // Add one default pair
+    _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
+
+    card.append(header, deviceRow, confRow, iouRow, pairsLbl, pairsContainer);
+    container.appendChild(card);
+    ann2MarkSettingsDirty();
+  };
+
+  function _makeYoloSliderRow(label, sliderId, valId, min, max, defVal, unit) {
+    const row = document.createElement('div');
+    row.className = 'ann2-yolo-slider-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = label;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.id = sliderId;
+    slider.min = min; slider.max = max; slider.value = defVal;
+    const valEl = document.createElement('span');
+    valEl.className = 'val';
+    valEl.id = valId;
+    valEl.textContent = defVal + (unit || '');
+    slider.oninput = function () {
+      // Enforce minimum 1%
+      if (parseInt(this.value) < 1) this.value = 1;
+      valEl.textContent = this.value + (unit || '');
+      ann2MarkSettingsDirty();
+    };
+    row.append(lbl, slider, valEl);
+    return row;
+  }
+
+  function _populateYoloClassSel(sel, names, selectedVal) {
+    sel.innerHTML = '';
+    names.forEach((n, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = `${i}: ${n}`;
+      if (String(i) === String(selectedVal)) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function _populateDsSel(sel, names, selectedVal) {
+    sel.innerHTML = '';
+    names.forEach((n, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = `${i}: ${n}`;
+      if (String(i) === String(selectedVal)) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function _addYoloPairRowDOM(container, yoloNames, dsNames, yoloClassId, dsClassId) {
+    const row = document.createElement('div');
+    row.className = 'ann2-yolo-class-pair';
+
+    const yoloSel = document.createElement('select');
+    yoloSel.className = 'ann2-yolo-yolo-sel';
+    _populateYoloClassSel(yoloSel, yoloNames, yoloClassId !== null ? yoloClassId : 0);
+    yoloSel.onchange = () => ann2MarkSettingsDirty();
+
+    const arrow = document.createElement('span');
+    arrow.className = 'ann2-pair-arrow';
+    arrow.innerHTML = '→';
+
+    const dsSel = document.createElement('select');
+    dsSel.className = 'ann2-yolo-ds-sel';
+    _populateDsSel(dsSel, dsNames, dsClassId !== null ? dsClassId : 0);
+    dsSel.onchange = () => ann2MarkSettingsDirty();
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'ann2-pair-del';
+    delBtn.textContent = '×';
+    delBtn.title = 'Remove pair';
+    delBtn.onclick = () => { row.remove(); ann2MarkSettingsDirty(); };
+
+    row.append(yoloSel, arrow, dsSel, delBtn);
+    container.appendChild(row);
+  }
+
+  window.ann2AddYoloPairRow = function (btn) {
+    const card = btn.closest('.ann2-yolo-entry');
+    if (!card) return;
+    const pairsContainer = card.querySelector('.ann2-yolo-pairs');
+    if (!pairsContainer) return;
+    const modelKey = card.dataset.model;
+    const yoloNames = _yoloClassCache[modelKey] || [];
+    const dsNames = _ds?.classes?.names || [];
+    _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
+    ann2MarkSettingsDirty();
+  };
+
+  // Collect YOLO entries from DOM into array for saving
+  function _collectYoloEntries() {
+    const entries = [];
+    document.querySelectorAll('.ann2-yolo-entry').forEach(card => {
+      const model = card.dataset.model;
+      const confSlider = card.querySelector('[id$="-conf"]');
+      const iouSlider = card.querySelector('[id$="-iou"]');
+      const deviceSel = card.querySelector('.ann2-yolo-device-sel');
+      const conf = confSlider ? (parseInt(confSlider.value) / 100) : 0.25;
+      const iou = iouSlider ? (parseInt(iouSlider.value) / 100) : 0.45;
+      const device = deviceSel ? deviceSel.value : 'cuda:0';
+      const pairs = [];
+      card.querySelectorAll('.ann2-yolo-class-pair').forEach(row => {
+        const yc = parseInt(row.querySelector('.ann2-yolo-yolo-sel')?.value || 0);
+        const dc = parseInt(row.querySelector('.ann2-yolo-ds-sel')?.value || 0);
+        pairs.push({ yolo_class_id: yc, ds_class_id: dc });
+      });
+      entries.push({ model, conf, iou, device, pairs });
+    });
+    return entries;
+  }
+
+  // Render YOLO entries from saved settings
+  async function _renderYoloEntries() {
+    const container = document.getElementById('ann2-yolo-entries');
+    if (!container) return;
+    container.innerHTML = '';
+    const entries = _autoAnnotateSettings.yolo_entries || [];
+    for (const entry of entries) {
+      const modelKey = entry.model || 'yolov26x';
+      const yoloNames = await _fetchYoloNames(modelKey);
+      const dsNames = _ds?.classes?.names || [];
+
+      const entryId = 'yolo-entry-' + Date.now() + Math.random();
+      const card = document.createElement('div');
+      card.className = 'ann2-yolo-entry';
+      card.dataset.model = modelKey;
+      card.id = entryId;
+
+      const header = document.createElement('div');
+      header.className = 'ann2-yolo-entry-header';
+      const modelLbl = document.createElement('span');
+      modelLbl.style.cssText = 'font-size:.7rem;font-weight:700;color:#fb923c;text-transform:uppercase;letter-spacing:.05em;flex-shrink:0;';
+      modelLbl.textContent = '⬡ YOLO';
+      const modelSel = document.createElement('select');
+      modelSel.className = 'ann2-yolo-model-sel';
+      Object.entries(YOLO_MODELS).forEach(([k, v]) => {
+        const o = document.createElement('option');
+        o.value = k; o.textContent = v.label;
+        if (k === modelKey) o.selected = true;
+        modelSel.appendChild(o);
+      });
+      modelSel.onchange = async function () {
+        card.dataset.model = this.value;
+        const newNames = await _fetchYoloNames(this.value);
+        card.querySelectorAll('.ann2-yolo-yolo-sel').forEach(sel => {
+          const cur = sel.value;
+          _populateYoloClassSel(sel, newNames, cur);
+        });
+        ann2MarkSettingsDirty();
+      };
+      const delBtn2 = document.createElement('button');
+      delBtn2.className = 'ann2-yolo-del-btn';
+      delBtn2.title = 'Remove';
+      delBtn2.textContent = '✕';
+      delBtn2.onclick = () => { card.remove(); ann2MarkSettingsDirty(); };
+      header.append(modelLbl, modelSel, delBtn2);
+
+      // Device selector row
+      const deviceRow = document.createElement('div');
+      deviceRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom: 2px;';
+      deviceRow.innerHTML = `
+        <span style="font-size:.72rem; color:var(--text-muted); white-space:nowrap; min-width:28px;">GPU</span>
+        <select class="ann2-yolo-device-sel" onchange="ann2MarkSettingsDirty()" style="flex:1; padding:4px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:.78rem; cursor:pointer;">
+        </select>
+      `;
+      const deviceSel = deviceRow.querySelector('.ann2-yolo-device-sel');
+      deviceSel.innerHTML = _gpuList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
+      deviceSel.value = entry.device || 'cuda:0';
+
+      const confPct = Math.round((entry.conf || 0.25) * 100);
+      const iouPct = Math.round((entry.iou || 0.45) * 100);
+      const confRow = _makeYoloSliderRow('Conf', entryId + '-conf', entryId + '-conf-val', 1, 99, confPct, '%');
+      const iouRow  = _makeYoloSliderRow('IoU',  entryId + '-iou',  entryId + '-iou-val',  1, 99, iouPct,  '%');
+
+      const pairsLbl = document.createElement('div');
+      pairsLbl.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+      pairsLbl.innerHTML = `
+        <span style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">YOLO Class → Dataset Class</span>
+        <button onclick="ann2AddYoloPairRow(this)" style="font-size:.72rem;padding:2px 7px;border-radius:4px;border:1px solid rgba(251,146,60,0.3);background:rgba(251,146,60,0.08);color:#fb923c;cursor:pointer;">+ Pair</button>
+      `;
+      const pairsContainer = document.createElement('div');
+      pairsContainer.className = 'ann2-yolo-pairs';
+      pairsContainer.style.cssText = 'display:flex;flex-direction:column;gap:5px;';
+      const pairs = entry.pairs || [];
+      if (pairs.length === 0) {
+        _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
+      } else {
+        pairs.forEach(p => _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, p.yolo_class_id, p.ds_class_id));
+      }
+
+      card.append(header, deviceRow, confRow, iouRow, pairsLbl, pairsContainer);
+      container.appendChild(card);
+    }
+  }
 
   // IoU computation (client-side)
   function _polygonIoU(polyA, polyB) {
@@ -2105,89 +2527,145 @@
   // Start auto annotate (S key)
   window.ann2StartAutoAnnotate = async function () {
     if (!_ds || !_images.length || _autoProcessing) return;
-    if (!_autoAnnotateSettings.prompts || _autoAnnotateSettings.prompts.length === 0) {
+    const isNoneModel = _autoAnnotateSettings.model === 'none';
+    const hasYolo = (_autoAnnotateSettings.yolo_entries || []).length > 0;
+
+    if (!isNoneModel && (!_autoAnnotateSettings.prompts || _autoAnnotateSettings.prompts.length === 0)) {
       if (window.toast) toast('Set prompts dulu di settings panel', 'err');
       return;
     }
+    if (isNoneModel && !hasYolo) {
+      if (window.toast) toast('Tambahkan minimal satu YOLO entry', 'err');
+      return;
+    }
+
     _autoProcessing = true;
-    _showProcessing(true, `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`);
+    _showProcessing(true, isNoneModel ? 'YOLO Detection...' : `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`);
 
     try {
       const imgObj = _images[_idx];
-      const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-auto-annotate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: imgObj.filename,
-          model: _autoAnnotateSettings.model,
-          prompts: _autoAnnotateSettings.prompts,
-          conf: _autoAnnotateSettings.conf || 0.25,
-          iou: _autoAnnotateSettings.iou || 0.85,
-          device: _autoAnnotateSettings.device || 'cuda:0',
-          recheck: !!_autoAnnotateSettings.recheck,
-          recheck_model: _autoAnnotateSettings.recheck_model || 'sam3',
-          recheck_device: _autoAnnotateSettings.recheck_device || 'cuda:0',
-          recheck_min_area: _autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70,
-          recheck_max_area: _autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20,
-          recheck_imgsz: _autoAnnotateSettings.recheck_imgsz !== undefined ? _autoAnnotateSettings.recheck_imgsz : 1024
-        })
-      });
-      const data = await resp.json();
-      if (resp.ok && data.success && data.annotations) {
+
+      // ── Collect all candidate annotations ──
+      let allAnnotations = [];
+
+      // 1) SAM auto-annotate (unless None)
+      if (!isNoneModel) {
+        const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-auto-annotate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: imgObj.filename,
+            model: _autoAnnotateSettings.model,
+            prompts: _autoAnnotateSettings.prompts,
+            conf: _autoAnnotateSettings.conf || 0.25,
+            iou: _autoAnnotateSettings.iou || 0.85,
+            device: _autoAnnotateSettings.device || 'cuda:0',
+            recheck: !!_autoAnnotateSettings.recheck,
+            recheck_model: _autoAnnotateSettings.recheck_model || 'sam3',
+            recheck_device: _autoAnnotateSettings.recheck_device || 'cuda:0',
+            recheck_min_area: _autoAnnotateSettings.recheck_min_area !== undefined ? _autoAnnotateSettings.recheck_min_area : 0.70,
+            recheck_max_area: _autoAnnotateSettings.recheck_max_area !== undefined ? _autoAnnotateSettings.recheck_max_area : 1.20,
+            recheck_imgsz: _autoAnnotateSettings.recheck_imgsz !== undefined ? _autoAnnotateSettings.recheck_imgsz : 1024
+          })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success && data.annotations) {
+          allAnnotations = allAnnotations.concat(data.annotations.map(a => ({
+            class_id: a.class_id,
+            points: a.points.map(p => [...p]),
+            type: 'polygon',
+            _iou_threshold: _autoAnnotateSettings.iou || 0.85
+          })));
+        } else if (!resp.ok || !data.success) {
+          if (window.toast) toast(data.error || 'SAM failed', 'err');
+        }
+      }
+
+      // 2) YOLO entries
+      if (hasYolo) {
+        _showProcessing(true, `Running YOLO detectors...`);
+        for (const entry of (_autoAnnotateSettings.yolo_entries || [])) {
+          try {
+            const yr = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/yolo-detect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: imgObj.filename,
+                model: entry.model,
+                conf: entry.conf || 0.25,
+                pairs: entry.pairs || []
+              })
+            });
+            const yd = await yr.json();
+            if (yr.ok && yd.success && yd.annotations) {
+              allAnnotations = allAnnotations.concat(yd.annotations.map(a => ({
+                class_id: a.class_id,
+                points: a.points.map(p => [...p]),
+                type: 'bbox',
+                _iou_threshold: entry.iou || 0.45
+              })));
+            }
+          } catch (ye) {
+            console.warn('YOLO detect error:', ye);
+          }
+        }
+      }
+
+      // ── Apply IoU filtering against existing annotations ──
+      _iouRejectedAnns = [];
+      const filteredAnns = [];
+      for (const newAnn of allAnnotations) {
+        const iouThreshold = newAnn._iou_threshold;
+        let isDup = false;
+        const newPoly = newAnn.type === 'bbox'
+          ? [[newAnn.points[0][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[1][1]], [newAnn.points[0][0], newAnn.points[1][1]]]
+          : newAnn.points;
+        for (const existing of _anns) {
+          const existPoly = existing.type === 'bbox'
+            ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+            : existing.points;
+          if (_polygonIoU(newPoly, existPoly) > iouThreshold) {
+            isDup = true;
+            break;
+          }
+        }
+        if (isDup) {
+          _iouRejectedAnns.push({
+            class_id: newAnn.class_id,
+            points: newPoly.map(p => [...p]),
+            type: 'polygon'
+          });
+        } else {
+          filteredAnns.push(newAnn);
+        }
+      }
+
+      if (filteredAnns.length > 0 || _iouRejectedAnns.length > 0) {
         if (_autoAnnotateActive) {
-          // Checked mode: add permanently and auto-loop approve & next
+          // Checked mode: add permanently
           _pushUndoState();
           let added = 0;
-          data.annotations.forEach(newAnn => {
-            let isDup = false;
-            for (const existing of _anns) {
-              if (existing.type === 'polygon' || existing.type === 'bbox') {
-                const existPoly = existing.type === 'bbox'
-                  ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
-                  : existing.points;
-                const iouThreshold = _autoAnnotateSettings.iou || 0.85;
-                const iou = _polygonIoU(newAnn.points, existPoly);
-                if (iou > iouThreshold) { isDup = true; break; }
-              }
-            }
-            if (!isDup) {
-              _anns.push({
-                class_id: newAnn.class_id,
-                points: newAnn.points.map(p => [...p]),
-                type: 'polygon',
-                locked: false
-              });
-              added++;
-            }
+          filteredAnns.forEach(newAnn => {
+            _anns.push({
+              class_id: newAnn.class_id,
+              points: newAnn.points.map(p => [...p]),
+              type: newAnn.type || 'polygon',
+              locked: false
+            });
+            added++;
           });
-          if (window.toast) toast(`Auto annotate: ${added} segments added`);
+          if (window.toast) toast(`Auto annotate: ${added} annotations added${_iouRejectedAnns.length ? ` (${_iouRejectedAnns.length} IoU dup)` : ''}`);
           _selIdx = _anns.length - 1;
           _renderAnnList();
           _redraw();
-
-          // Auto-save and loop to next image
           await ann2ApproveAutoAnnotate();
         } else {
-          // Unchecked mode: store as temporary preview polygons
-          // Also filter against existing annotations and track IoU-rejected
-          _iouRejectedAnns = [];
-          const iouThreshold = _autoAnnotateSettings.iou || 0.85;
-          _tempAutoAnns = data.annotations.filter(newAnn => {
-            for (const existing of _anns) {
-              if (existing.type === 'polygon' || existing.type === 'bbox') {
-                const existPoly = existing.type === 'bbox'
-                  ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
-                  : existing.points;
-                if (_polygonIoU(newAnn.points, existPoly) > iouThreshold) {
-                  _iouRejectedAnns.push({ class_id: newAnn.class_id, points: newAnn.points.map(p => [...p]), type: 'polygon' });
-                  return false;
-                }
-              }
-            }
-            return true;
-          }).map(newAnn => ({
+          // Unchecked mode: store as temporary preview
+          _tempAutoAnns = filteredAnns.map(newAnn => ({
             class_id: newAnn.class_id,
-            points: newAnn.points.map(p => [...p]),
+            points: newAnn.type === 'bbox'
+              ? [[newAnn.points[0][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[1][1]], [newAnn.points[0][0], newAnn.points[1][1]]]
+              : newAnn.points.map(p => [...p]),
             type: 'polygon'
           }));
           _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1;
@@ -2195,7 +2673,7 @@
           _redraw();
         }
       } else {
-        if (window.toast) toast(data.error || 'Auto annotate failed', 'err');
+        if (window.toast) toast(allAnnotations.length > 0 ? `All ${allAnnotations.length} results rejected by IoU overlap` : 'No annotations found', 'err');
       }
     } catch (e) {
       if (window.toast) toast('Auto annotate error: ' + e.message, 'err');
