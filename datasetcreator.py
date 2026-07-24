@@ -590,6 +590,34 @@ def move_to_annotate(dataset_name: str, payload: AnnotateMoveRequest):
     return {"moved": moved, "errors": errors}
 
 
+@app.post("/api/dataset/{dataset_name}/move-back-to-dataset")
+def move_back_to_dataset(dataset_name: str, payload: AnnotateMoveRequest):
+    dataset_path = safe_dataset_path(dataset_name)
+    images_dir     = os.path.join(dataset_path, 'images')
+    labels_dir     = os.path.join(dataset_path, 'labels')
+    ann_images_dir = os.path.join(dataset_path, 'annotate', 'images')
+    ann_labels_dir = os.path.join(dataset_path, 'annotate', 'labels')
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(labels_dir, exist_ok=True)
+    moved  = []
+    errors = []
+    for filename in payload.filenames:
+        safe_fn = os.path.basename(filename)
+        src_img   = os.path.join(ann_images_dir, safe_fn)
+        src_lbl   = os.path.join(ann_labels_dir, os.path.splitext(safe_fn)[0] + '.txt')
+        dst_img   = os.path.join(images_dir, safe_fn)
+        dst_lbl   = os.path.join(labels_dir, os.path.splitext(safe_fn)[0] + '.txt')
+        try:
+            if os.path.isfile(src_img):
+                shutil.move(src_img, dst_img)
+            if os.path.isfile(src_lbl):
+                shutil.move(src_lbl, dst_lbl)
+            moved.append(safe_fn)
+        except Exception as e:
+            errors.append({"file": safe_fn, "error": str(e)})
+    return {"moved": moved, "errors": errors}
+
+
 # ─────────────────────────────────────────────
 # Scan for Bounding Box labels API
 # ─────────────────────────────────────────────

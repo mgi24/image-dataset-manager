@@ -317,11 +317,9 @@
       const r = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/image-tags/${encodeURIComponent(filename)}`);
       _curTags = r.ok ? (await r.json()).tags || [] : [];
       _originalTags = [..._curTags];
-      _updateTagsSaveBtnVisibility();
     } catch (e) {
       _curTags = [];
       _originalTags = [];
-      _updateTagsSaveBtnVisibility();
     }
   }
 
@@ -1415,7 +1413,7 @@
       btn.textContent = '×'; btn.onclick = () => {
         _curTags = _curTags.filter(x => x !== tag);
         _renderTagsArea();
-        _updateTagsSaveBtnVisibility();
+        window.ann2SaveTags();
       };
       chip.appendChild(t); chip.appendChild(btn);
       area.appendChild(chip);
@@ -1441,22 +1439,10 @@
     if (val && !_curTags.includes(val)) {
       _curTags.push(val);
       _renderTagsArea();
-      _updateTagsSaveBtnVisibility();
+      window.ann2SaveTags();
     }
     sel.value = '';
   };
-
-  function _areTagsDirty() {
-    if (_curTags.length !== _originalTags.length) return true;
-    const setA = new Set(_curTags);
-    return !_originalTags.every(t => setA.has(t));
-  }
-
-  function _updateTagsSaveBtnVisibility() {
-    const btn = document.getElementById('ann2-tags-save-btn');
-    if (!btn) return;
-    btn.style.display = _areTagsDirty() ? 'block' : 'none';
-  }
 
   window.ann2SaveTags = async function () {
     if (!_ds || !_images.length) return;
@@ -1469,7 +1455,6 @@
       });
       if (resp.ok) {
         _originalTags = [..._curTags];
-        _updateTagsSaveBtnVisibility();
         if (window.toast) toast('Tags saved ✓');
       } else {
         if (window.toast) toast('Failed to save tags', 'err');

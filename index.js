@@ -270,7 +270,11 @@ function switchPage(p, pushNav = true, subIndex = 0) {
   document.getElementById('ann-toggle').style.display = isGrid ? '' : 'none';
   document.getElementById('sel-toggle').style.display = isGrid ? '' : 'none';
   document.getElementById('filters-bar').style.display = isGrid ? '' : 'none';
-  if (!isGrid) { document.getElementById('sel-bar').classList.remove('show'); }
+  if (!isGrid) {
+    document.getElementById('sel-bar').classList.remove('show');
+  } else {
+    updateSelBar();
+  }
 
   if (p === 'class') {
     loadTagsManager();
@@ -640,6 +644,23 @@ function updateSelBar() {
   document.getElementById('sel-lbl').textContent = `${selected.size} dipilih`;
   // Rename works for both single (rename file) and multi (batch rename with base name)
   document.getElementById('rename-btn').disabled = selected.size === 0;
+
+  const annBtn = document.getElementById('annotate-btn');
+  if (annBtn) {
+    if (currentPage === 'annotation') {
+      annBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/></svg>
+        To Dataset
+      `;
+      annBtn.onclick = doMoveBackToDataset;
+    } else {
+      annBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor"><path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"/></svg>
+        Annotate
+      `;
+      annBtn.onclick = doAnnotate;
+    }
+  }
 }
 
 // Called by card onclick
@@ -1051,6 +1072,67 @@ function doAnnotate() {
         if (d.errors.length) toast(`${d.errors.length} error`, 'err');
         // reset button
         okBtn.className = 'btn btn-danger'; okBtn.textContent = 'OK';
+      })
+      .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
+  };
+}
+
+function doMoveBackToDataset() {
+  if (!selected.size) return;
+  const fns = [...selected];
+  document.getElementById('confirm-title').textContent = 'Kembalikan ke Dataset';
+  document.getElementById('confirm-body').textContent = `Pindahkan kembali ${fns.length} gambar + label ke folder dataset/ ? File akan dipindahkan (bukan disalin).`;
+  const okBtn = document.getElementById('confirm-ok');
+  okBtn.className = 'btn btn-accent';
+  okBtn.textContent = 'Kembalikan';
+  openModal('confirm-modal');
+  okBtn.onclick = () => {
+    closeModal('confirm-modal');
+    showLoader(true, 'Memindahkan…');
+    fetch(`/api/dataset/${enc(ds.name)}/move-back-to-dataset`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames: fns })
+    })
+      .then(r => r.json())
+      .then(d => {
+        showLoader(false);
+        const moved = new Set(d.moved);
+        if (annData && annData.images) {
+          annData.images = annData.images.filter(img => !moved.has(img.filename));
+        }
+        filteredAnnImgs = filteredAnnImgs.filter(img => !moved.has(img.filename));
+        selected.clear(); syncSelUI();
+        clearGrid('ann-grid-inner', 'ann-sentinel');
+        loadedAnn = 0;
+        loadBatchAnn();
+
+        toast(`${d.moved.length} gambar dikembalikan ke dataset`);
+        if (d.errors.length) toast(`${d.errors.length} error`, 'err');
+        
+        // Reset confirmation button
+        okBtn.className = 'btn btn-danger'; okBtn.textContent = 'OK';
+
+        // Refresh dataset images cache in the background
+        Promise.all([
+          fetch(`/api/dataset/${enc(ds.name)}`).then(r => r.json()),
+          fetch(`/api/dataset/${enc(ds.name)}/tags`).then(r => r.json())
+        ])
+          .then(([data, tagsMapping]) => {
+            const images = (data.images || []).map(img => {
+              return {
+                ...img,
+                tags: tagsMapping[img.filename] || []
+              };
+            });
+            if (ds && ds.name === data.name) {
+              ds.images = images;
+              filteredImgs = [...ds.images];
+              renderStats(ds.images, 'ds-stats', true);
+              renderDist(ds.images, ds.classes, 'ds-dist');
+              refreshTagsFilterDropdown();
+            }
+          })
+          .catch(e => console.error("Error refreshing dataset in background:", e));
       })
       .catch(e => { showLoader(false); toast(`Error: ${e.message}`, 'err'); });
   };
