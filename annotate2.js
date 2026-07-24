@@ -2525,7 +2525,8 @@
     }
 
     _autoProcessing = true;
-    _showProcessing(true, isNoneModel ? 'YOLO Detection...' : `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`);
+    const startMsg = hasYolo ? 'YOLO Detection...' : `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`;
+    _showProcessing(true, startMsg);
 
     try {
       const imgObj = _images[_idx];
@@ -2533,8 +2534,43 @@
       // ── Collect all candidate annotations ──
       let allAnnotations = [];
 
-      // 1) SAM auto-annotate (unless None)
+      // 1) YOLO entries (processed first to prioritize YOLO)
+      if (hasYolo) {
+        _showProcessing(true, `Running YOLO detectors...`);
+        for (const entry of (_autoAnnotateSettings.yolo_entries || [])) {
+          try {
+            const yr = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/yolo-detect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: imgObj.filename,
+                model: entry.model,
+                conf: entry.conf || 0.25,
+                device: entry.device || 'cuda:0',
+                pairs: entry.pairs || []
+              })
+            });
+            const yd = await yr.json();
+            if (yr.ok && yd.success && yd.annotations) {
+              allAnnotations = allAnnotations.concat(yd.annotations.map(a => ({
+                class_id: a.class_id,
+                points: a.points.map(p => [...p]),
+                type: a.type || 'bbox',
+                _iou_threshold: entry.iou || 0.45
+              })));
+            } else {
+              if (window.toast) toast(yd.error || 'YOLO detect failed', 'err');
+            }
+          } catch (ye) {
+            console.warn('YOLO detect error:', ye);
+            if (window.toast) toast(ye.message || 'YOLO detect error', 'err');
+          }
+        }
+      }
+
+      // 2) SAM auto-annotate (unless None)
       if (!isNoneModel) {
+        _showProcessing(true, `SAM ${_autoAnnotateSettings.model} — ${imgObj.filename || ''}`);
         const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-auto-annotate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2566,41 +2602,7 @@
         }
       }
 
-      // 2) YOLO entries
-      if (hasYolo) {
-        _showProcessing(true, `Running YOLO detectors...`);
-        for (const entry of (_autoAnnotateSettings.yolo_entries || [])) {
-          try {
-            const yr = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/yolo-detect`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                filename: imgObj.filename,
-                model: entry.model,
-                conf: entry.conf || 0.25,
-                device: entry.device || 'cuda:0',
-                pairs: entry.pairs || []
-              })
-            });
-            const yd = await yr.json();
-            if (yr.ok && yd.success && yd.annotations) {
-              allAnnotations = allAnnotations.concat(yd.annotations.map(a => ({
-                class_id: a.class_id,
-                points: a.points.map(p => [...p]),
-                type: 'bbox',
-                _iou_threshold: entry.iou || 0.45
-              })));
-            } else {
-              if (window.toast) toast(yd.error || 'YOLO detect failed', 'err');
-            }
-          } catch (ye) {
-            console.warn('YOLO detect error:', ye);
-            if (window.toast) toast(ye.message || 'YOLO detect error', 'err');
-          }
-        }
-      }
-
-      // ── Apply IoU filtering against existing annotations ──
+      // ── Apply IoU filtering against existing and accepted annotations ──
       _iouRejectedAnns = [];
       const filteredAnns = [];
       for (const newAnn of allAnnotations) {
@@ -2609,6 +2611,8 @@
         const newPoly = newAnn.type === 'bbox'
           ? [[newAnn.points[0][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[0][1]], [newAnn.points[1][0], newAnn.points[1][1]], [newAnn.points[0][0], newAnn.points[1][1]]]
           : newAnn.points;
+
+        // 1) Compare against existing annotations on the canvas (_anns)
         for (const existing of _anns) {
           const existPoly = existing.type === 'bbox'
             ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
@@ -2618,6 +2622,24 @@
             break;
           }
         }
+
+        // 2) Compare against already accepted annotations in this scan (filteredAnns)
+        if (!isDup) {
+          for (const existing of filteredAnns) {
+            const existPoly = existing.type === 'bbox'
+              ? [[existing.points[0][0], existing.points[0][1]], [existing.points[1][0], existing.points[0][1]], [existing.points[1][0], existing.points[1][1]], [existing.points[0][0], existing.points[1][1]]]
+              : existing.points;
+
+            // If same class, deduplicate with 0.5 threshold.
+            // If different class, only deduplicate if almost identical (0.85).
+            const overlapLimit = (newAnn.class_id === existing.class_id) ? 0.5 : 0.85;
+            if (_polygonIoU(newPoly, existPoly) > overlapLimit) {
+              isDup = true;
+              break;
+            }
+          }
+        }
+
         if (isDup) {
           _iouRejectedAnns.push({
             class_id: newAnn.class_id,
@@ -2663,6 +2685,9 @@
         }
       } else {
         if (window.toast) toast(allAnnotations.length > 0 ? `All ${allAnnotations.length} results rejected by IoU overlap` : 'No annotations found', 'err');
+        if (_autoAnnotateActive) {
+          await ann2ApproveAutoAnnotate();
+        }
       }
     } catch (e) {
       if (window.toast) toast('Auto annotate error: ' + e.message, 'err');
@@ -2704,7 +2729,9 @@
       // If auto loop is still active, trigger prediction automatically
       if (_autoAnnotateActive) {
         setTimeout(async () => {
-          await ann2StartAutoAnnotate();
+          if (_autoAnnotateActive) {
+            await ann2StartAutoAnnotate();
+          }
         }, 500);
       }
     } else {
