@@ -254,7 +254,7 @@ class YoloClassPair(BaseModel):
 
 class YoloDetectRequest(BaseModel):
     filename: str
-    model: str = 'yolov26x'
+    model: str = 'yolo26x-seg'
     conf: Optional[float] = 0.25
     device: Optional[str] = 'cuda:0'
     pairs: List[YoloClassPair] = []
@@ -1463,17 +1463,29 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
 
 @app.get("/api/yolo-model-names")
 def get_yolo_model_names(model: str):
+    if model == 'yolov26x':
+        model = 'yolo26x-seg'
     model_file = f"{model}.pt"
     model_path = os.path.join(BASE_DIR, model_file)
     if not os.path.exists(model_path):
-        # Fallback to yolo11n.pt
-        model_path = 'yolo11n.pt'
+        model_path = model_file
     try:
         yolo = _get_yolo_model(model, model_path, device='cpu')
         names = [yolo.names[i] for i in sorted(yolo.names.keys())]
         return {"success": True, "names": names}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        # Fallback if download or load fails
+        try:
+            fallback_model = 'yolo11n-seg' if "-seg" in model else 'yolo11n'
+            fallback_file = f"{fallback_model}.pt"
+            fallback_path = os.path.join(BASE_DIR, fallback_file)
+            if not os.path.exists(fallback_path):
+                fallback_path = fallback_file
+            yolo = _get_yolo_model(fallback_model, fallback_path, device='cpu')
+            names = [yolo.names[i] for i in sorted(yolo.names.keys())]
+            return {"success": True, "names": names}
+        except Exception as e2:
+            return {"success": False, "error": f"Failed to load requested model and fallback: {str(e2)}"}
 
 @app.post("/api/dataset/{dataset_name}/yolo-detect")
 def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
@@ -1488,29 +1500,55 @@ def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
         raise HTTPException(status_code=404, detail="Image not found")
 
     try:
-        model_name = payload.model if payload.model else 'yolov26x'
+        model_name = payload.model if payload.model else 'yolo26x-seg'
+        if model_name == 'yolov26x':
+            model_name = 'yolo26x-seg'
         model_file = f"{model_name}.pt"
         model_path = os.path.join(BASE_DIR, model_file)
         if not os.path.exists(model_path):
-            model_path = 'yolo11n.pt'
+            model_path = model_file
 
         device = payload.device if payload.device else 'cuda:0'
-        yolo = _get_yolo_model(model_name, model_path, device)
-        results = yolo(image_path, conf=payload.conf, device=device)
+        
+        try:
+            yolo = _get_yolo_model(model_name, model_path, device)
+            results = yolo(image_path, conf=payload.conf, device=device)
+        except Exception as first_err:
+            print(f"Failed to load requested model {model_name}, trying fallback: {first_err}")
+            fallback_model = 'yolo11n-seg' if "-seg" in model_name else 'yolo11n'
+            fallback_file = f"{fallback_model}.pt"
+            fallback_path = os.path.join(BASE_DIR, fallback_file)
+            if not os.path.exists(fallback_path):
+                fallback_path = fallback_file
+            yolo = _get_yolo_model(fallback_model, fallback_path, device)
+            results = yolo(image_path, conf=payload.conf, device=device)
 
         annotations = []
         if results and len(results) > 0:
             result = results[0]
+            masks = result.masks
             boxes = result.boxes
             if boxes is not None:
                 pair_map = {p.yolo_class_id: p.ds_class_id for p in payload.pairs}
                 h, w = result.orig_shape
 
-                for box in boxes:
+                for i, box in enumerate(boxes):
                     cls_id = int(box.cls[0].item())
                     if cls_id not in pair_map:
                         continue
 
+                    # If segment masks are available, extract polygon points
+                    if masks is not None and len(masks.xyn) > i:
+                        poly_pts = masks.xyn[i].tolist()
+                        if len(poly_pts) >= 3:
+                            annotations.append({
+                                "class_id": pair_map[cls_id],
+                                "points": poly_pts,
+                                "type": "polygon"
+                            })
+                            continue
+
+                    # Fallback to bbox if mask is missing
                     xyxy = box.xyxy[0].cpu().numpy()
                     x1 = float(xyxy[0]) / w
                     y1 = float(xyxy[1]) / h

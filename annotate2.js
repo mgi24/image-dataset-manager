@@ -2149,8 +2149,8 @@
 
   // Available YOLO models and their class names
   const YOLO_MODELS = {
-    'yolov26x': {
-      label: 'YOLOv2 6X',
+    'yolo26x-seg': {
+      label: 'YOLO26x Segment',
       // COCO 80 class names (placeholder — fetched from server if available)
       classes: null // will be fetched/cached
     }
@@ -2393,7 +2393,7 @@
     container.innerHTML = '';
     const entries = _autoAnnotateSettings.yolo_entries || [];
     for (const entry of entries) {
-      const modelKey = entry.model || 'yolov26x';
+      const modelKey = entry.model || 'yolo26x-seg';
       const yoloNames = await _fetchYoloNames(modelKey);
       const dsNames = _ds?.classes?.names || [];
 
@@ -2578,6 +2578,7 @@
                 filename: imgObj.filename,
                 model: entry.model,
                 conf: entry.conf || 0.25,
+                device: entry.device || 'cuda:0',
                 pairs: entry.pairs || []
               })
             });
@@ -2589,9 +2590,12 @@
                 type: 'bbox',
                 _iou_threshold: entry.iou || 0.45
               })));
+            } else {
+              if (window.toast) toast(yd.error || 'YOLO detect failed', 'err');
             }
           } catch (ye) {
             console.warn('YOLO detect error:', ye);
+            if (window.toast) toast(ye.message || 'YOLO detect error', 'err');
           }
         }
       }
