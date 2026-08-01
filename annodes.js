@@ -1,4 +1,4 @@
-// Annodes JavaScript node editor
+// Annodes JavaScript node editor with Multiple Pins & Resize Observer
 
 (function () {
   let _nodes = [];
@@ -14,12 +14,22 @@
 
   // DOM elements
   const canvasWrap = document.getElementById('canvas-wrap');
+  const canvasContent = document.getElementById('canvas-content');
   const nodesContainer = document.getElementById('nodes-container');
   const svgOverlay = document.getElementById('node-svg-overlay');
 
+  // Panning State
+  let _panX = 0;
+  let _panY = 0;
+  let _isPanning = false;
+  let _startPanMouseX = 0;
+  let _startPanMouseY = 0;
+  let _startPanX = 0;
+  let _startPanY = 0;
+
   // --- Initializer ---
   async function init() {
-    // Register sidebar template drag/drop or click triggers
+    // Register sidebar template triggers
     document.querySelectorAll('.node-template-btn').forEach(btn => {
       btn.onclick = () => {
         const type = btn.getAttribute('data-type');
@@ -34,7 +44,33 @@
     // Load saved canvas layout
     await loadCanvas();
 
-    // Mouse move/up listeners for connection drawing & canvas pan
+    // Restore pan state
+    _panX = parseFloat(localStorage.getItem('annodes_pan_x')) || 0;
+    _panY = parseFloat(localStorage.getItem('annodes_pan_y')) || 0;
+    canvasContent.style.transform = `translate(${_panX}px, ${_panY}px)`;
+
+    // Mouse down listener for panning
+    canvasWrap.onmousedown = (e) => {
+      const isMiddle = e.button === 1;
+      const isLeftOnBg = e.button === 0 && (e.target === canvasWrap || e.target === nodesContainer || e.target === svgOverlay);
+      
+      if (isMiddle || isLeftOnBg) {
+        e.preventDefault();
+        _isPanning = true;
+        _startPanMouseX = e.clientX;
+        _startPanMouseY = e.clientY;
+        _startPanX = _panX;
+        _startPanY = _panY;
+        canvasWrap.style.cursor = 'grabbing';
+      }
+    };
+
+    // Prevent default middle click scroll behavior
+    canvasWrap.addEventListener('mousedown', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
+
+    // Mouse move/up listeners for connection drawing
     document.addEventListener('mousemove', onDocumentMouseMove);
     document.addEventListener('mouseup', onDocumentMouseUp);
 
@@ -94,7 +130,16 @@
           verbose: false,
           device: _cachedGpus[0]?.id || 'cuda:0',
           class_bindings: {},
-          last_preview: null
+          last_preview: null,
+          last_logs: null,
+          preview_width: 280,
+          preview_height: 140
+        };
+      } else if (type === 'preview') {
+        properties = {
+          last_preview: null,
+          preview_width: 280,
+          preview_height: 140
         };
       }
     }
@@ -130,15 +175,87 @@
     refreshAllYoloBindings();
   }
 
+  // --- Pins Layout Helper ---
+  function createPinsLayout(node, inputs, outputs) {
+    const container = document.createElement('div');
+    container.className = 'pins-container';
+
+    // Inputs Column (Left)
+    const inCol = document.createElement('div');
+    inCol.className = 'pins-column pins-column-in';
+    inputs.forEach(pin => {
+      const row = document.createElement('div');
+      row.className = 'pin-row';
+      
+      const pinEl = document.createElement('div');
+      pinEl.className = 'pin pin-in';
+      pinEl.dataset.nodeId = node.id;
+      pinEl.dataset.pinName = pin.name;
+      pinEl.dataset.pinType = 'in';
+      
+      // Check if connected
+      const isConnected = _connections.some(c => c.toNodeId === node.id && c.toPinName === pin.name);
+      if (isConnected) pinEl.classList.add('connected');
+      
+      const label = document.createElement('span');
+      label.className = 'pin-label';
+      label.textContent = pin.label;
+      if (pin.optional) {
+        label.textContent += ' (opt)';
+        label.style.opacity = '0.6';
+      }
+
+      row.append(pinEl, label);
+      inCol.appendChild(row);
+    });
+
+    // Outputs Column (Right)
+    const outCol = document.createElement('div');
+    outCol.className = 'pins-column pins-column-out';
+    outputs.forEach(pin => {
+      const row = document.createElement('div');
+      row.className = 'pin-row';
+
+      const label = document.createElement('span');
+      label.className = 'pin-label';
+      label.textContent = pin.label;
+
+      const pinEl = document.createElement('div');
+      pinEl.className = 'pin pin-out';
+      pinEl.dataset.nodeId = node.id;
+      pinEl.dataset.pinName = pin.name;
+      pinEl.dataset.pinType = 'out';
+      pinEl.onmousedown = (e) => startConnectionDrag(e, node.id, pin.name, 'out');
+      
+      // Check if connected
+      const isConnected = _connections.some(c => c.fromNodeId === node.id && c.fromPinName === pin.name);
+      if (isConnected) pinEl.classList.add('connected');
+
+      row.append(label, pinEl);
+      outCol.appendChild(row);
+    });
+
+    container.append(inCol, outCol);
+    return container;
+  }
+
   // --- Rendering Nodes DOM ---
   function renderNodeDOM(node) {
     const el = document.createElement('div');
     el.id = node.id;
-    el.className = 'node';
+    el.className = `node ${node.type}`;
     if (_selectedNodeId === node.id) el.classList.add('selected');
     el.style.left = node.x + 'px';
     el.style.top = node.y + 'px';
     el.onclick = () => selectNode(node.id);
+
+    // ResizeObserver to automatically redraw wires when node bounds change (resizable)
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => {
+        renderConnections();
+      });
+      ro.observe(el);
+    }
 
     // Node Header
     const header = document.createElement('div');
@@ -147,8 +264,7 @@
 
     const title = document.createElement('div');
     title.className = 'node-header-title';
-    let nodeLabel = node.type.toUpperCase().replace('_', ' ');
-    title.textContent = nodeLabel;
+    title.textContent = node.type.toUpperCase().replace('_', ' ');
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'node-close-btn';
@@ -162,52 +278,32 @@
     const body = document.createElement('div');
     body.className = 'node-body';
 
-    // Terminals/Pins
-    if (node.type === 'single_image' || node.type === 'folder') {
-      const pinOut = document.createElement('div');
-      pinOut.className = 'pin pin-out';
-      pinOut.dataset.nodeId = node.id;
-      pinOut.dataset.pinType = 'out';
-      pinOut.onmousedown = (e) => startConnectionDrag(e, node.id, 'out');
-      el.append(pinOut);
-
-      // Populate Input fields
-      if (node.type === 'single_image') {
-        body.append(
-          createInputField('Image Path', 'text', node.properties.image_path, (v) => {
-            node.properties.image_path = v;
-            saveCanvas();
-          }),
-          createInputField('Annotation Path (.txt)', 'text', node.properties.annotation_path, (v) => {
-            node.properties.annotation_path = v;
-            saveCanvas();
-          })
-        );
-      } else {
-        body.append(
-          createInputField('Images Folder', 'text', node.properties.images_dir, (v) => {
-            node.properties.images_dir = v;
-            saveCanvas();
-          }),
-          createInputField('Labels Folder', 'text', node.properties.labels_dir, (v) => {
-            node.properties.labels_dir = v;
-            saveCanvas();
-          })
-        );
-      }
+    // Configure Pins, Inputs, Outputs based on Type
+    if (node.type === 'single_image') {
+      const pins = createPinsLayout(node, [], [
+        { name: 'image', label: 'Image' },
+        { name: 'annotation', label: 'Annotation' },
+        { name: 'class', label: 'Class' }
+      ]);
+      body.append(
+        pins,
+        createInputField('Image Path', 'text', node.properties.image_path, (v) => {
+          node.properties.image_path = v;
+          saveCanvas();
+        }),
+        createInputField('Annotation Path (.txt)', 'text', node.properties.annotation_path, (v) => {
+          node.properties.annotation_path = v;
+          saveCanvas();
+        })
+      );
 
       // Classes editor
       const classGroup = document.createElement('div');
       classGroup.className = 'field-group';
-      
-      const label = document.createElement('span');
-      label.className = 'field-label';
-      label.textContent = 'Classes & Colors';
-      
-      const classList = document.createElement('div');
-      classList.className = 'class-list-container';
-      classList.id = `class-list-${node.id}`;
-
+      classGroup.innerHTML = `
+        <span class="field-label">Classes & Colors</span>
+        <div class="class-list-container" id="class-list-${node.id}"></div>
+      `;
       const addBtn = document.createElement('button');
       addBtn.className = 'btn-add-class';
       addBtn.textContent = '+ Add Class';
@@ -217,21 +313,62 @@
         saveCanvas();
         refreshAllYoloBindings();
       };
-
-      classGroup.append(label, classList, addBtn);
+      classGroup.append(addBtn);
       body.append(classGroup);
-      
-      // Initial render classes list
+      setTimeout(() => renderClassesList(node), 0);
+
+    } else if (node.type === 'folder') {
+      const pins = createPinsLayout(node, [], [
+        { name: 'image', label: 'Image' },
+        { name: 'annotation', label: 'Annotation' },
+        { name: 'class', label: 'Class' }
+      ]);
+      body.append(
+        pins,
+        createInputField('Images Folder', 'text', node.properties.images_dir, (v) => {
+          node.properties.images_dir = v;
+          saveCanvas();
+        }),
+        createInputField('Labels Folder', 'text', node.properties.labels_dir, (v) => {
+          node.properties.labels_dir = v;
+          saveCanvas();
+        })
+      );
+
+      // Classes editor
+      const classGroup = document.createElement('div');
+      classGroup.className = 'field-group';
+      classGroup.innerHTML = `
+        <span class="field-label">Classes & Colors</span>
+        <div class="class-list-container" id="class-list-${node.id}"></div>
+      `;
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn-add-class';
+      addBtn.textContent = '+ Add Class';
+      addBtn.onclick = () => {
+        node.properties.classes.push({ name: `class_${node.properties.classes.length}`, color: '#a855f7' });
+        renderClassesList(node);
+        saveCanvas();
+        refreshAllYoloBindings();
+      };
+      classGroup.append(addBtn);
+      body.append(classGroup);
       setTimeout(() => renderClassesList(node), 0);
 
     } else if (node.type === 'yolo_detector') {
-      const pinIn = document.createElement('div');
-      pinIn.className = 'pin pin-in';
-      pinIn.dataset.nodeId = node.id;
-      pinIn.dataset.pinType = 'in';
-      el.append(pinIn);
+      const pins = createPinsLayout(node, 
+        [
+          { name: 'image', label: 'Image' },
+          { name: 'class', label: 'Class' }
+        ],
+        [
+          { name: 'image', label: 'Image' },
+          { name: 'annotation', label: 'Annotation' },
+          { name: 'class', label: 'Class' }
+        ]
+      );
+      body.appendChild(pins);
 
-      // Settings fields
       // 1. Model Selection
       const modelGroup = document.createElement('div');
       modelGroup.className = 'field-group';
@@ -313,14 +450,23 @@
       bindingGroup.innerHTML = `
         <span class="field-label">Class Bindings</span>
         <div class="binding-list-container" id="binding-list-${node.id}">
-          <span style="font-size:0.72rem; color:var(--text-muted);">Connect input to bind classes</span>
+          <span style="font-size:0.72rem; color:var(--text-muted);">Connect Input Class to configure bindings</span>
         </div>
       `;
 
-      // 7. Preview frame
+      // 7. Resizable Preview frame
       const previewContainer = document.createElement('div');
-      previewContainer.className = 'preview-container';
+      previewContainer.className = 'preview-container resizable-box';
       previewContainer.id = `preview-container-${node.id}`;
+      if (node.properties.preview_width) {
+        previewContainer.style.width = node.properties.preview_width + 'px';
+        previewContainer.style.height = node.properties.preview_height + 'px';
+      }
+      previewContainer.onmouseup = () => {
+        node.properties.preview_width = previewContainer.clientWidth;
+        node.properties.preview_height = previewContainer.clientHeight;
+        saveCanvas();
+      };
       
       const previewPlaceholder = document.createElement('span');
       previewPlaceholder.className = 'preview-placeholder';
@@ -335,6 +481,7 @@
         previewImg.style.display = 'block';
         previewPlaceholder.style.display = 'none';
       }
+      
       previewContainer.append(previewPlaceholder, previewImg);
 
       // 8. Logs / Console container
@@ -352,8 +499,49 @@
       }
 
       body.append(modelGroup, imgszRow, confGroup, verboseRow, gpuGroup, bindingGroup, previewContainer, logsGroup);
-
       setTimeout(() => refreshYoloBindings(node.id), 0);
+
+    } else if (node.type === 'preview') {
+      const pins = createPinsLayout(node, 
+        [
+          { name: 'image', label: 'Image' },
+          { name: 'annotation', label: 'Annotation' },
+          { name: 'class', label: 'Class', optional: true }
+        ],
+        []
+      );
+      body.appendChild(pins);
+
+      // Resizable Preview frame
+      const previewContainer = document.createElement('div');
+      previewContainer.className = 'preview-container resizable-box';
+      previewContainer.id = `preview-container-${node.id}`;
+      if (node.properties.preview_width) {
+        previewContainer.style.width = node.properties.preview_width + 'px';
+        previewContainer.style.height = node.properties.preview_height + 'px';
+      }
+      previewContainer.onmouseup = () => {
+        node.properties.preview_width = previewContainer.clientWidth;
+        node.properties.preview_height = previewContainer.clientHeight;
+        saveCanvas();
+      };
+      
+      const previewPlaceholder = document.createElement('span');
+      previewPlaceholder.className = 'preview-placeholder';
+      previewPlaceholder.textContent = 'No Ground Truth/Predicted Preview';
+      
+      const previewImg = document.createElement('img');
+      previewImg.className = 'preview-img';
+      previewImg.id = `preview-img-${node.id}`;
+      previewImg.style.display = 'none';
+      if (node.properties.last_preview) {
+        previewImg.src = `data:image/jpeg;base64,${node.properties.last_preview}`;
+        previewImg.style.display = 'block';
+        previewPlaceholder.style.display = 'none';
+      }
+      
+      previewContainer.append(previewPlaceholder, previewImg);
+      body.appendChild(previewContainer);
     }
 
     el.append(header, body);
@@ -436,20 +624,20 @@
     const yoloNode = _nodes.find(n => n.id === yoloNodeId);
     if (!yoloNode) return;
 
-    // Find if an input node is connected
-    let connectedInputNode = null;
+    // Find if a class connection is made to the YOLO node
+    let connectedClassSourceNode = null;
     for (const conn of _connections) {
-      if (conn.toNodeId === yoloNodeId) {
+      if (conn.toNodeId === yoloNodeId && conn.toPinName === 'class') {
         const fromNode = _nodes.find(n => n.id === conn.fromNodeId);
-        if (fromNode && (fromNode.type === 'single_image' || fromNode.type === 'folder')) {
-          connectedInputNode = fromNode;
+        if (fromNode) {
+          connectedClassSourceNode = fromNode;
           break;
         }
       }
     }
 
-    if (!connectedInputNode) {
-      bindingList.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Hubungkan input node ke YOLO untuk melakukan binding class</span>`;
+    if (!connectedClassSourceNode) {
+      bindingList.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Connect Class output to YOLO to configure bindings</span>`;
       yoloNode.properties.class_bindings = {};
       return;
     }
@@ -468,7 +656,7 @@
 
       bindingList.innerHTML = '';
       const modelClasses = d.names;
-      const inputClasses = connectedInputNode.properties.classes || [];
+      const inputClasses = connectedClassSourceNode.properties.classes || [];
 
       if (modelClasses.length === 0) {
         bindingList.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Tidak ada class pada model</span>`;
@@ -544,22 +732,23 @@
     };
   }
 
-  function startConnectionDrag(e, nodeId, pinType) {
+  function startConnectionDrag(e, nodeId, pinName, pinType) {
     e.preventDefault();
     e.stopPropagation();
     
-    // Find pin coordinates relative to canvas-wrap
+    // Find pin coordinates relative to canvas-content
     const pinEl = e.target;
     const pinRect = pinEl.getBoundingClientRect();
-    const wrapRect = canvasWrap.getBoundingClientRect();
+    const contentRect = canvasContent.getBoundingClientRect();
 
     _draftConn = {
       fromNodeId: nodeId,
-      fromPin: pinType,
-      startX: pinRect.left + pinRect.width/2 - wrapRect.left,
-      startY: pinRect.top + pinRect.height/2 - wrapRect.top,
-      mouseX: pinRect.left + pinRect.width/2 - wrapRect.left,
-      mouseY: pinRect.top + pinRect.height/2 - wrapRect.top
+      fromPinName: pinName,
+      fromPinType: pinType,
+      startX: pinRect.left + pinRect.width/2 - contentRect.left,
+      startY: pinRect.top + pinRect.height/2 - contentRect.top,
+      mouseX: pinRect.left + pinRect.width/2 - contentRect.left,
+      mouseY: pinRect.top + pinRect.height/2 - contentRect.top
     };
   }
 
@@ -571,27 +760,26 @@
     });
   }
 
-  // --- Connection Wire Rendering (SVG) ---
   function renderConnections() {
     svgOverlay.innerHTML = '';
-    const wrapRect = canvasWrap.getBoundingClientRect();
+    const contentRect = canvasContent.getBoundingClientRect();
 
     _connections.forEach(conn => {
       const fromNodeEl = document.getElementById(conn.fromNodeId);
       const toNodeEl = document.getElementById(conn.toNodeId);
       if (!fromNodeEl || !toNodeEl) return;
 
-      const fromPin = fromNodeEl.querySelector('.pin-out');
-      const toPin = toNodeEl.querySelector('.pin-in');
+      const fromPin = fromNodeEl.querySelector(`.pin-out[data-pin-name="${conn.fromPinName}"]`);
+      const toPin = toNodeEl.querySelector(`.pin-in[data-pin-name="${conn.toPinName}"]`);
       if (!fromPin || !toPin) return;
 
       const fromRect = fromPin.getBoundingClientRect();
       const toRect = toPin.getBoundingClientRect();
 
-      const fx = fromRect.left + fromRect.width/2 - wrapRect.left;
-      const fy = fromRect.top + fromRect.height/2 - wrapRect.top;
-      const tx = toRect.left + toRect.width/2 - wrapRect.left;
-      const ty = toRect.top + toRect.height/2 - wrapRect.top;
+      const fx = fromRect.left + fromRect.width/2 - contentRect.left;
+      const fy = fromRect.top + fromRect.height/2 - contentRect.top;
+      const tx = toRect.left + toRect.width/2 - contentRect.left;
+      const ty = toRect.top + toRect.height/2 - contentRect.top;
 
       drawBezierPath(fx, fy, tx, ty, false);
     });
@@ -619,12 +807,23 @@
     svgOverlay.appendChild(path);
   }
 
-  // --- Mouse Listeners ---
   function onDocumentMouseMove(e) {
     const wrapRect = canvasWrap.getBoundingClientRect();
+    const contentRect = canvasContent.getBoundingClientRect();
+
+    // Handling Canvas Panning
+    if (_isPanning) {
+      const dx = e.clientX - _startPanMouseX;
+      const dy = e.clientY - _startPanMouseY;
+      _panX = _startPanX + dx;
+      _panY = _startPanY + dy;
+      canvasContent.style.transform = `translate(${_panX}px, ${_panY}px)`;
+    }
 
     // Handling Node Dragging
     if (_dragNodeState) {
+      // Delta mouse movements must not be scaled by canvas translation offsets, 
+      // but should remain absolute values in pixels.
       const dx = e.clientX - _dragNodeState.startX;
       const dy = e.clientY - _dragNodeState.startY;
       const node = _nodes.find(n => n.id === _dragNodeState.nodeId);
@@ -643,13 +842,21 @@
 
     // Handling Connection Dragging
     if (_draftConn) {
-      _draftConn.mouseX = e.clientX - wrapRect.left;
-      _draftConn.mouseY = e.clientY - wrapRect.top;
+      _draftConn.mouseX = e.clientX - contentRect.left;
+      _draftConn.mouseY = e.clientY - contentRect.top;
       renderConnections();
     }
   }
 
   function onDocumentMouseUp(e) {
+    // End Canvas Panning
+    if (_isPanning) {
+      _isPanning = false;
+      canvasWrap.style.cursor = 'default';
+      localStorage.setItem('annodes_pan_x', _panX);
+      localStorage.setItem('annodes_pan_y', _panY);
+    }
+
     // End Node Dragging
     if (_dragNodeState) {
       _dragNodeState = null;
@@ -661,24 +868,31 @@
       const targetPin = e.target.closest('.pin-in');
       if (targetPin) {
         const toNodeId = targetPin.getAttribute('data-node-id');
+        const toPinName = targetPin.getAttribute('data-pin-name');
         const fromNodeId = _draftConn.fromNodeId;
+        const fromPinName = _draftConn.fromPinName;
         
         // Prevent self connection
         if (fromNodeId !== toNodeId) {
-          // Remove existing connection going to the same input terminal (limit 1 input terminal)
-          _connections = _connections.filter(c => !(c.toNodeId === toNodeId));
+          // Remove existing connection going to the same input terminal
+          _connections = _connections.filter(c => !(c.toNodeId === toNodeId && c.toPinName === toPinName));
           
           // Add connection
           _connections.push({
             id: 'conn-' + Date.now(),
             fromNodeId,
-            fromPin: 'OUT',
+            fromPinName,
             toNodeId,
-            toPin: 'IN'
+            toPinName
           });
           
           saveCanvas();
-          refreshYoloBindings(toNodeId);
+          
+          // Re-render and trigger bindings config if connected to YOLO class
+          renderAll(); 
+          if (toNodeId) {
+            refreshYoloBindings(toNodeId);
+          }
         }
       }
       _draftConn = null;
@@ -743,54 +957,46 @@
       if (r.ok && d.success) {
         showToast(`Berhasil memproses: ${d.filename || ''}`, 'success');
         
-        // Find connected YOLO detector node
-        const yolo = _nodes.find(n => n.type === 'yolo_detector');
-        if (yolo) {
-          // Cache the preview image base64 inside node state
-          if (d.preview) {
-            yolo.properties.last_preview = d.preview;
-          }
+        // Loop over the previews returned by backend to update node image containers
+        if (d.previews) {
+          Object.keys(d.previews).forEach(nodeId => {
+            const node = _nodes.find(n => n.id === nodeId);
+            if (node) {
+              const base64 = d.previews[nodeId];
+              node.properties.last_preview = base64;
 
-          // Build verbose log + detections console output
-          let logHtml = '';
-          if (d.verbose_log) {
-            const escapedVerbose = d.verbose_log
-              .replace(/&/g, "&amp;")
-              .replace(/</g, "&lt;")
-              .replace(/>/g, "&gt;")
-              .replace(/"/g, "&quot;")
-              .replace(/'/g, "&#039;");
-            logHtml += `<div style="color:var(--text-muted); border-bottom:1px dashed var(--border); padding-bottom:6px; margin-bottom:6px; font-weight:normal;">${escapedVerbose}</div>`;
-          }
-          if (d.detections && d.detections.length > 0) {
-            logHtml += `<div><strong>Detections:</strong></div>`;
-            d.detections.forEach(det => {
-              logHtml += `<div>• ${det.class_name}: ${(det.confidence * 100).toFixed(1)}%</div>`;
-            });
-          } else {
-            logHtml += `<div style="color:var(--text-muted);">No detections</div>`;
-          }
-
-          yolo.properties.last_logs = logHtml;
-          saveCanvas();
-
-          // Render preview in UI
-          const previewImg = document.getElementById(`preview-img-${yolo.id}`);
-          const previewPlaceholder = document.querySelector(`#preview-container-${yolo.id} .preview-placeholder`);
-          
-          if (previewImg && d.preview) {
-            previewImg.src = `data:image/jpeg;base64,${d.preview}`;
-            previewImg.style.display = 'block';
-            if (previewPlaceholder) previewPlaceholder.style.display = 'none';
-          }
-
-          // Render logs in UI
-          const logsConsole = document.getElementById(`yolo-logs-${yolo.id}`);
-          if (logsConsole) {
-            logsConsole.innerHTML = logHtml;
-            logsConsole.scrollTop = logsConsole.scrollHeight;
-          }
+              const previewImg = document.getElementById(`preview-img-${nodeId}`);
+              const previewPlaceholder = document.querySelector(`#preview-container-${nodeId} .preview-placeholder`);
+              
+              if (previewImg && base64) {
+                previewImg.src = `data:image/jpeg;base64,${base64}`;
+                previewImg.style.display = 'block';
+                if (previewPlaceholder) previewPlaceholder.style.display = 'none';
+              }
+            }
+          });
         }
+
+        // Loop over logs returned by backend to update console log outputs
+        if (d.logs) {
+          Object.keys(d.logs).forEach(nodeId => {
+            const node = _nodes.find(n => n.id === nodeId);
+            if (node) {
+              const logsHtml = d.logs[nodeId];
+              node.properties.last_logs = logsHtml;
+
+              const logsConsole = document.getElementById(`yolo-logs-${nodeId}`);
+              if (logsConsole) {
+                logsConsole.innerHTML = logsHtml;
+                logsConsole.scrollTop = logsConsole.scrollHeight;
+              }
+            }
+          });
+        }
+        
+        // Save the updated previews/logs properties to DB
+        saveCanvas();
+
       } else {
         const errorMsg = d.detail || d.error || 'Terjadi kesalahan saat memproses flow.';
         showToast(errorMsg, 'error');

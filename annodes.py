@@ -196,256 +196,415 @@ def hex_to_bgr(hex_str: str):
 @app.post("/api/run-flow")
 def run_flow(payload: RunFlowRequest):
     nodes = {n["id"]: n for n in payload.nodes}
-    connections = payload.connections
-
-    # Find the YOLO Node
-    yolo_node = None
-    for n in payload.nodes:
-        if n["type"] == "yolo_detector":
-            yolo_node = n
-            break
-
-    if not yolo_node:
-        raise HTTPException(status_code=400, detail="Missing YOLO Detector node in flow")
-
-    # Find input node connected to YOLO node
-    input_node = None
-    for conn in connections:
-        if conn["toNodeId"] == yolo_node["id"]:
-            from_node = nodes.get(conn["fromNodeId"])
-            if from_node and from_node["type"] in ("single_image", "folder"):
-                input_node = from_node
-                break
-
-    if not input_node:
-        raise HTTPException(status_code=400, detail="YOLO Detector node must be connected to an Input Node (Single Image or Folder)")
-
-    # Execute Input Node
-    image_path = ""
-    annotation_path = None
-    input_classes = []
     
-    # Extract input classes
-    raw_classes = input_node["properties"].get("classes", [])
-    for idx, c in enumerate(raw_classes):
-        input_classes.append({
-            "index": idx,
-            "name": c.get("name", f"Class {idx}"),
-            "color": c.get("color", "#a855f7")
-        })
+    # Map connection targets: connections_to[(toNodeId, toPinName)] = (fromNodeId, fromPinName)
+    connections_to = {}
+    for conn in payload.connections:
+        to_node = conn.get("toNodeId")
+        to_pin = conn.get("toPinName")
+        from_node = conn.get("fromNodeId")
+        from_pin = conn.get("fromPinName")
+        if to_node and to_pin:
+            connections_to[(to_node, to_pin)] = (from_node, from_pin)
 
-    is_folder_mode = input_node["type"] == "folder"
+    # State & Caching for sequential folder node processing
+    is_folder_mode = False
     total_images = 0
     current_index = 0
+    current_image_filename = ""
 
-    if is_folder_mode:
-        images_dir = input_node["properties"].get("images_dir", "").strip()
-        labels_dir = input_node["properties"].get("labels_dir", "").strip()
-        
+    # Pre-evaluate folder mode if any folder node exists, to advance index
+    folder_node = None
+    for n in payload.nodes:
+        if n["type"] == "folder":
+            folder_node = n
+            break
+
+    if folder_node:
+        is_folder_mode = True
+        images_dir = folder_node["properties"].get("images_dir", "").strip()
         if not images_dir or not os.path.exists(images_dir):
             raise HTTPException(status_code=400, detail=f"Images directory '{images_dir}' does not exist")
         
-        # Get sorted images
         img_extensions = ('.jpg', '.jpeg', '.png')
         images = sorted([f for f in os.listdir(images_dir) if f.lower().endswith(img_extensions)])
         total_images = len(images)
         if total_images == 0:
             raise HTTPException(status_code=400, detail=f"No images found in folder '{images_dir}'")
             
-        # Get current index from DB
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT current_index FROM flow_state LIMIT 1")
         row = cursor.fetchone()
         current_index = row[0] if row else 0
-        
         if current_index >= total_images:
-            current_index = 0 # wrap around
+            current_index = 0
             
-        image_name = images[current_index]
-        image_path = os.path.join(images_dir, image_name)
+        current_image_filename = images[current_index]
         
-        # Check label path
-        if labels_dir and os.path.exists(labels_dir):
-            label_name = os.path.splitext(image_name)[0] + ".txt"
-            cand_label = os.path.join(labels_dir, label_name)
-            if os.path.exists(cand_label):
-                annotation_path = cand_label
-                
-        # Update index for next run
+        # Advance index for next run
         next_idx = (current_index + 1) % total_images
         cursor.execute("UPDATE flow_state SET current_index = ?", (next_idx,))
         conn.commit()
         conn.close()
-    else:
-        # Single Image Node
-        image_path = input_node["properties"].get("image_path", "").strip()
-        annotation_path = input_node["properties"].get("annotation_path", "").strip()
-        if not annotation_path:
-            annotation_path = None
-            
-        if not image_path or not os.path.exists(image_path):
-            raise HTTPException(status_code=400, detail=f"Image file '{image_path}' not found")
-        if annotation_path and not os.path.exists(annotation_path):
-            raise HTTPException(status_code=400, detail=f"Annotation file '{annotation_path}' not found")
 
-    # Validate annotation file formatting if present
-    parsed_annotations = []
-    if annotation_path:
-        try:
-            with open(annotation_path, "r", encoding="utf-8") as f:
-                for line_idx, line in enumerate(f):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    class_id = int(parts[0])
-                    coords = [float(x) for x in parts[1:]]
-                    if len(coords) < 4:
-                        raise ValueError(f"Too few coordinates on line {line_idx+1}")
-                    parsed_annotations.append({"class_id": class_id, "coords": coords})
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Format annotation.txt salah: {str(e)}")
+    # Cache for evaluation
+    eval_cache = {}
+    previews = {}
+    logs = {}
 
-    # Execute YOLO Node
-    yolo_model_name = yolo_node["properties"].get("model", "yolov8x-seg").strip()
-    yolo_imgsz = int(yolo_node["properties"].get("imgsz", 640))
-    yolo_conf = float(yolo_node["properties"].get("conf", 0.25))
-    yolo_verbose = bool(yolo_node["properties"].get("verbose", False))
-    yolo_device = yolo_node["properties"].get("device", "cuda:0")
-    
-    # Class bindings from UI
-    class_bindings = yolo_node["properties"].get("class_bindings", {}) # maps model_class_id string -> input_class_index (int)
+    def evaluate(node_id: str, pin_name: str):
+        cache_key = (node_id, pin_name)
+        if cache_key in eval_cache:
+            return eval_cache[cache_key]
 
-    if not yolo_model_name.endswith(".pt"):
-        model_file = f"{yolo_model_name}.pt"
-    else:
-        model_file = yolo_model_name
-    model_path = os.path.join(MODEL_DIR, model_file)
-    if not os.path.exists(model_path):
-        raise HTTPException(status_code=400, detail=f"YOLO model '{model_file}' not found in model/ folder")
+        node = nodes.get(node_id)
+        if not node:
+            raise HTTPException(status_code=400, detail=f"Node {node_id} not found in canvas")
 
-    # Capture stdout and stderr, and logging for YOLO logs
-    import io
-    import logging
-    from contextlib import redirect_stdout, redirect_stderr
-    
-    yolo_logger = logging.getLogger("ultralytics")
-    log_capture_string = io.StringIO()
-    ch = logging.StreamHandler(log_capture_string)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("%(message)s"))
-    yolo_logger.addHandler(ch)
-    
-    f_stdout = io.StringIO()
-    f_stderr = io.StringIO()
-    
-    try:
-        yolo = _get_yolo_model(model_file, model_path, yolo_device)
-        with redirect_stdout(f_stdout), redirect_stderr(f_stderr):
-            results = yolo.predict(image_path, imgsz=yolo_imgsz, conf=yolo_conf, device=yolo_device, verbose=True)
-        verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
-    except Exception as e:
-        verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"
-        raise HTTPException(status_code=500, detail=f"YOLO inference error: {str(e)}")
-    finally:
-        yolo_logger.removeHandler(ch)
-
-    # Render Preview Image
-    img = cv2.imread(image_path)
-    if img is None:
-        raise HTTPException(status_code=500, detail="Failed to load input image for rendering preview")
-
-    h, w = img.shape[:2]
-
-    # Process detections
-    detected_objects = []
-    if results and len(results) > 0:
-        res = results[0]
-        boxes = res.boxes
-        masks = res.masks
-
-        # Loop to draw predictions
-        for i, box in enumerate(boxes):
-            cls_id = int(box.cls[0].item())
-            conf_val = float(box.conf[0].item())
-            
-            # Map detected class
-            bind_val = class_bindings.get(str(cls_id)) # key in JSON is always string
-            
-            target_class_name = None
-            target_color = "#3b82f6" # default blue
-            
-            if bind_val is not None and bind_val != "" and int(bind_val) < len(input_classes):
-                mapped_idx = int(bind_val)
-                target_class_name = input_classes[mapped_idx]["name"]
-                target_color = input_classes[mapped_idx]["color"]
+        # 1. Input Nodes
+        if node["type"] in ("single_image", "folder"):
+            # Setup image path
+            if node["type"] == "folder":
+                images_dir = node["properties"].get("images_dir", "").strip()
+                labels_dir = node["properties"].get("labels_dir", "").strip()
+                
+                img_path = os.path.join(images_dir, current_image_filename)
+                
+                # Setup annotation path
+                anno_path = None
+                if labels_dir and os.path.exists(labels_dir):
+                    label_name = os.path.splitext(current_image_filename)[0] + ".txt"
+                    cand_label = os.path.join(labels_dir, label_name)
+                    if os.path.exists(cand_label):
+                        anno_path = cand_label
             else:
-                # If setting bind class is empty, fallback to model's default classes
-                if cls_id < len(yolo.names):
-                    target_class_name = yolo.names[cls_id]
-                else:
-                    target_class_name = f"Class {cls_id}"
+                img_path = node["properties"].get("image_path", "").strip()
+                anno_path = node["properties"].get("annotation_path", "").strip()
+                if not anno_path:
+                    anno_path = None
 
-            bgr = hex_to_bgr(target_color)
+            # Parse annotations
+            parsed_annotations = []
+            if anno_path:
+                if not os.path.exists(anno_path):
+                    raise HTTPException(status_code=400, detail=f"Annotation file '{anno_path}' not found")
+                try:
+                    with open(anno_path, "r", encoding="utf-8") as f:
+                        for line_idx, line in enumerate(f):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split()
+                            class_id = int(parts[0])
+                            coords = [float(x) for x in parts[1:]]
+                            if len(coords) < 4:
+                                raise ValueError(f"Too few coordinates on line {line_idx+1}")
+                            parsed_annotations.append({
+                                "class_id": class_id,
+                                "coords": coords,
+                                "is_segment": len(coords) > 4
+                            })
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Failed to parse annotation file '{anno_path}': {str(e)}")
 
-            # Draw polygon if mask is available
-            has_drawn_mask = False
-            if masks is not None and len(masks.xyn) > i:
-                poly_pts = masks.xyn[i]
-                if len(poly_pts) >= 3:
-                    pts_px = np.array([[int(p[0]*w), int(p[1]*h)] for p in poly_pts], dtype=np.int32)
-                    
-                    # Fill color 30%
-                    overlay = img.copy()
-                    cv2.fillPoly(overlay, [pts_px], bgr)
-                    cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
-                    
-                    # Draw outline
-                    cv2.polylines(img, [pts_px], True, bgr, 2)
-                    has_drawn_mask = True
-                    
-                    # Label position
-                    min_y_idx = np.argmin(pts_px[:, 1])
-                    lbl_x = int(pts_px[min_y_idx][0])
-                    lbl_y = int(pts_px[min_y_idx][1])
+            # Parse classes
+            raw_classes = node["properties"].get("classes", [])
+            node_classes = []
+            for idx, c in enumerate(raw_classes):
+                node_classes.append({
+                    "index": idx,
+                    "name": c.get("name", f"Class {idx}"),
+                    "color": c.get("color", "#a855f7")
+                })
+
+            # Cache all outputs for this input node
+            eval_cache[(node_id, "image")] = img_path
+            eval_cache[(node_id, "annotation")] = parsed_annotations
+            eval_cache[(node_id, "class")] = node_classes
+
+            return eval_cache[cache_key]
+
+        # 2. YOLO Node
+        elif node["type"] == "yolo_detector":
+            # Get connected image input
+            img_source = connections_to.get((node_id, "image"))
+            if not img_source:
+                raise HTTPException(status_code=400, detail="YOLO Detector node is missing connected 'Image' input")
+            src_image_path = evaluate(img_source[0], img_source[1])
+
+            # Get connected class input
+            class_source = connections_to.get((node_id, "class"))
+            src_classes = []
+            if class_source:
+                src_classes = evaluate(class_source[0], class_source[1])
+
+            # Configure settings
+            yolo_model_name = node["properties"].get("model", "yolov8x-seg").strip()
+            yolo_imgsz = int(node["properties"].get("imgsz", 640))
+            yolo_conf = float(node["properties"].get("conf", 0.25))
+            yolo_verbose = bool(node["properties"].get("verbose", False))
+            yolo_device = node["properties"].get("device", "cuda:0")
+            class_bindings = node["properties"].get("class_bindings", {})
+
+            if not yolo_model_name.endswith(".pt"):
+                model_file = f"{yolo_model_name}.pt"
+            else:
+                model_file = yolo_model_name
+            model_path = os.path.join(MODEL_DIR, model_file)
+            if not os.path.exists(model_path):
+                raise HTTPException(status_code=400, detail=f"YOLO model '{model_file}' not found in model/ folder")
+
+            # Capture stdout/stderr/logging
+            import io
+            import logging
+            from contextlib import redirect_stdout, redirect_stderr
             
-            # Draw bbox if no mask drawn
-            if not has_drawn_mask:
-                xyxy = box.xyxy[0].cpu().numpy()
-                x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+            yolo_logger = logging.getLogger("ultralytics")
+            log_capture_string = io.StringIO()
+            ch = logging.StreamHandler(log_capture_string)
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(logging.Formatter("%(message)s"))
+            yolo_logger.addHandler(ch)
+            
+            f_stdout = io.StringIO()
+            f_stderr = io.StringIO()
+
+            try:
+                yolo = _get_yolo_model(model_file, model_path, yolo_device)
+                with redirect_stdout(f_stdout), redirect_stderr(f_stderr):
+                    results = yolo.predict(src_image_path, imgsz=yolo_imgsz, conf=yolo_conf, device=yolo_device, verbose=True)
+                verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
+            except Exception as e:
+                verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"
+                raise HTTPException(status_code=500, detail=f"YOLO inference error: {str(e)}")
+            finally:
+                yolo_logger.removeHandler(ch)
+
+            # Process YOLO outputs
+            yolo_annotations = []
+            detected_objects_summary = []
+            
+            # Load raw image to draw YOLO preview
+            img = cv2.imread(src_image_path)
+            if img is None:
+                raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for YOLO preview")
+            h, w = img.shape[:2]
+
+            if results and len(results) > 0:
+                res = results[0]
+                boxes = res.boxes
+                masks = res.masks
+
+                for i, box in enumerate(boxes):
+                    cls_id = int(box.cls[0].item())
+                    conf_val = float(box.conf[0].item())
+                    
+                    # Map to custom class index if bound
+                    bind_val = class_bindings.get(str(cls_id))
+                    
+                    target_class_name = None
+                    target_color = "#3b82f6" # default blue
+                    mapped_class_id = cls_id
+                    
+                    if bind_val is not None and bind_val != "" and int(bind_val) < len(src_classes):
+                        mapped_class_id = int(bind_val)
+                        target_class_name = src_classes[mapped_class_id]["name"]
+                        target_color = src_classes[mapped_class_id]["color"]
+                    else:
+                        if cls_id < len(yolo.names):
+                            target_class_name = yolo.names[cls_id]
+                        else:
+                            target_class_name = f"Class {cls_id}"
+
+                    bgr = hex_to_bgr(target_color)
+
+                    # Check coordinates
+                    coords = []
+                    is_segment = False
+                    if masks is not None and len(masks.xyn) > i:
+                        poly_pts = masks.xyn[i]
+                        if len(poly_pts) >= 3:
+                            # Flatten coordinates
+                            for pt in poly_pts:
+                                coords.extend([float(pt[0]), float(pt[1])])
+                            is_segment = True
+                            
+                            # Draw preview polygon
+                            pts_px = np.array([[int(pt[0]*w), int(pt[1]*h)] for pt in poly_pts], dtype=np.int32)
+                            overlay = img.copy()
+                            cv2.fillPoly(overlay, [pts_px], bgr)
+                            cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                            cv2.polylines(img, [pts_px], True, bgr, 2)
+                            min_y_idx = np.argmin(pts_px[:, 1])
+                            lbl_x = int(pts_px[min_y_idx][0])
+                            lbl_y = int(pts_px[min_y_idx][1])
+                    
+                    if not is_segment:
+                        # bounding box normalized coordinates
+                        xywhn = box.xywhn[0].cpu().numpy()
+                        coords = [float(c) for c in xywhn] # [xc, yc, w, h]
+                        
+                        # Draw preview box
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                        overlay = img.copy()
+                        cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                        cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+                        lbl_x, lbl_y = x1, y1
+
+                    # Draw text label on YOLO preview
+                    lbl_txt = f"{target_class_name} {conf_val:.2f}"
+                    (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                    cv2.rectangle(img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                    cv2.putText(img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+                    yolo_annotations.append({
+                        "class_id": mapped_class_id,
+                        "coords": coords,
+                        "is_segment": is_segment,
+                        "confidence": conf_val
+                    })
+                    
+                    detected_objects_summary.append({
+                        "class_name": target_class_name,
+                        "confidence": conf_val
+                    })
+
+            # Base64 encode YOLO preview image
+            _, buffer = cv2.imencode(".jpg", img)
+            preview_b64 = base64.b64encode(buffer).decode("utf-8")
+            previews[node_id] = preview_b64
+
+            # Generate YOLO node logs HTML
+            log_html = ""
+            if verbose_log:
+                escaped_verbose = verbose_log.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                log_html += f'<div style="color:var(--text-muted); border-bottom:1px dashed var(--border); padding-bottom:6px; margin-bottom:6px; font-weight:normal;">{escaped_verbose}</div>'
+            if detected_objects_summary:
+                log_html += "<div><strong>Detections:</strong></div>"
+                for det in detected_objects_summary:
+                    log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}%</div>"
+            else:
+                log_html += '<div style="color:var(--text-muted);">No detections</div>'
+            logs[node_id] = log_html
+
+            # Cache YOLO output pins
+            eval_cache[(node_id, "image")] = src_image_path
+            eval_cache[(node_id, "annotation")] = yolo_annotations
+            eval_cache[(node_id, "class")] = src_classes
+
+            return eval_cache[cache_key]
+
+        raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
+
+    # Process Preview Nodes (leaf nodes)
+    preview_nodes_found = False
+    for n in payload.nodes:
+        if n["type"] == "preview":
+            preview_nodes_found = True
+            p_node_id = n["id"]
+            
+            # Resolve inputs
+            img_source = connections_to.get((p_node_id, "image"))
+            anno_source = connections_to.get((p_node_id, "annotation"))
+            class_source = connections_to.get((p_node_id, "class"))
+
+            if not img_source or not anno_source:
+                raise HTTPException(status_code=400, detail="Preview node is missing connected 'Image' or 'Annotation' input")
+
+            src_image_path = evaluate(img_source[0], img_source[1])
+            src_annotations = evaluate(anno_source[0], anno_source[1])
+            
+            src_classes = []
+            if class_source:
+                src_classes = evaluate(class_source[0], class_source[1])
+
+            # Draw outline + 30% fill
+            img = cv2.imread(src_image_path)
+            if img is None:
+                raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for Preview rendering")
+            
+            h, w = img.shape[:2]
+
+            for anno in src_annotations:
+                class_id = anno["class_id"]
+                coords = anno["coords"]
+                is_segment = anno.get("is_segment", len(coords) > 4)
+                conf = anno.get("confidence")
+
+                # Resolve class name & color
+                target_name = f"Class {class_id}"
+                target_color = "#10b981" # default emerald
                 
-                # Fill color 30%
-                overlay = img.copy()
-                cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
-                cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                if class_id < len(src_classes):
+                    target_name = src_classes[class_id]["name"]
+                    target_color = src_classes[class_id]["color"]
                 
-                # Draw outline
-                cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
-                lbl_x, lbl_y = x1, y1
+                bgr = hex_to_bgr(target_color)
 
-            # Draw text label
-            lbl_txt = f"{target_class_name} {conf_val:.2f}"
-            (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-            cv2.rectangle(img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
-            cv2.putText(img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                lbl_x, lbl_y = 0, 0
+                if is_segment:
+                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                    if len(pts_px) >= 3:
+                        overlay = img.copy()
+                        cv2.fillPoly(overlay, [pts_px], bgr)
+                        cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                        cv2.polylines(img, [pts_px], True, bgr, 2)
+                        
+                        min_y_idx = np.argmin(pts_px[:, 1])
+                        lbl_x = int(pts_px[min_y_idx][0])
+                        lbl_y = int(pts_px[min_y_idx][1])
+                else:
+                    # bounding box: [xc, yc, bw, bh]
+                    if len(coords) >= 4:
+                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                        x1 = int((xc - bw/2) * w)
+                        y1 = int((yc - bh/2) * h)
+                        x2 = int((xc + bw/2) * w)
+                        y2 = int((yc + bh/2) * h)
+                        
+                        overlay = img.copy()
+                        cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                        cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+                        lbl_x, lbl_y = x1, y1
 
-            detected_objects.append({
-                "class_id": cls_id,
-                "class_name": target_class_name,
-                "confidence": conf_val
-            })
+                # Draw Text Label if class_source is connected
+                if class_source:
+                    lbl_txt = target_name
+                    if conf is not None:
+                        lbl_txt += f" {conf:.2f}"
+                    (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                    cv2.rectangle(img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                    cv2.putText(img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
-    # Encode image to Base64
-    _, buffer = cv2.imencode(".jpg", img)
-    preview_b64 = base64.b64encode(buffer).decode("utf-8")
+            # Encode preview
+            _, buffer = cv2.imencode(".jpg", img)
+            preview_b64 = base64.b64encode(buffer).decode("utf-8")
+            previews[p_node_id] = preview_b64
+
+    # If no Preview nodes found, evaluate the YOLO node directly so we get its outputs
+    if not preview_nodes_found:
+        for n in payload.nodes:
+            if n["type"] == "yolo_detector":
+                evaluate(n["id"], "image")
+
+    # Find the active input node to return filename
+    active_filename = "N/A"
+    for n in payload.nodes:
+        if n["type"] in ("single_image", "folder"):
+            img_src = (n["id"], "image")
+            if img_src in eval_cache:
+                active_filename = os.path.basename(eval_cache[img_src])
+                break
 
     return {
         "success": True,
-        "filename": os.path.basename(image_path),
-        "preview": preview_b64,
-        "detections": detected_objects,
-        "verbose_log": verbose_log,
+        "filename": active_filename,
+        "previews": previews,
+        "logs": logs,
         "is_folder_mode": is_folder_mode,
         "current_index": current_index,
         "total_images": total_images
