@@ -20,14 +20,13 @@ def load_first_image():
 def main():
     try:
         # Load image path
-        image_path = load_first_image()
+        image_path = "test.jpg"
         
-        model_path = os.path.join("model", "sam3.1.pt")
+        model_path = os.path.join("model", "sam3.pt")
         if not os.path.exists(model_path):
             print(f"Error: {model_path} not found. Please wait for download_sam3.py to finish.")
             return
             
-        print("Loading SAM 3.1 model...")
         overrides = dict(
             conf=0.8,
             task="segment",
@@ -35,7 +34,8 @@ def main():
             model=model_path,
             save=False,
             device="cuda",  # Kembalikan ke CUDA
-            half=False      # Paksa FP32 untuk kestabilan indexing
+            half=False,      # Paksa FP32 untuk kestabilan indexing
+            verbose=True
         )
 
         predictor = SAM3SemanticPredictor(overrides=overrides)
@@ -45,7 +45,7 @@ def main():
         # Run inference using text prompt
         print("Running inference (Text Prompt: ['car', 'truck'])...")
         predictor.set_image(image_path)
-        results = predictor(text=["car", "truck", "license plate", "person"])
+        results = predictor(text=["car", "truck", "license plate", "person", "motorcycle", "bicycle"])
             
         # Draw results
         result_img = results[0].plot()

@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Annodes — Node-Based Auto-Annotation</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/index.css">
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-secondary: #131824;
+      --bg-tertiary: #1b2234;
+      --border: rgba(255,255,255,0.08);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #a855f7;
+      --accent-glow: rgba(168, 85, 247, 0.35);
+    }
+    
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    #header {
+      height: 60px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+    
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #a855f7, #fb923c);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: #fff;
+    }
+    .brand-title {
+      font-weight: 600;
+      font-size: 1.15rem;
+      letter-spacing: -0.01em;
+      background: linear-gradient(135deg, #fff, var(--text-secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .btn-run {
+      background: linear-gradient(135deg, #a855f7, #7c3aed);
+      color: #fff;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 0 16px rgba(168, 85, 247, 0.4);
+      transition: all 0.2s;
+    }
+    .btn-run:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 24px rgba(168, 85, 247, 0.6);
+    }
+    .btn-run:active {
+      transform: translateY(0);
+    }
+    
+    /* Main Layout */
+    #main-container {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    
+    /* Sidebar */
+    #sidebar {
+      width: 250px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      z-index: 5;
+    }
+    
+    .sidebar-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+    
+    .node-templates {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .node-template-btn {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: grab;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .node-template-btn:hover {
+      color: var(--text-primary);
+      border-color: rgba(255,255,255,0.15);
+      background: #222a3f;
+    }
+    .node-template-btn:active {
+      cursor: grabbing;
+    }
+    
+    /* Canvas Area */
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background-color: var(--bg-primary);
+      background-image: 
+        radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+        radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+      background-size: 20px 20px;
+      background-position: 0 0, 10px 10px;
+      user-select: none;
+    }
+    
+    #node-svg-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+    
+    #nodes-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+    }
+    
+    /* Connection paths */
+    .connection-line {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 3.5px;
+      filter: drop-shadow(0 0 4px var(--accent-glow));
+      transition: stroke 0.15s;
+    }
+    .connection-line.draft {
+      stroke: var(--text-muted);
+      stroke-dasharray: 5,5;
+      filter: none;
+    }
+    
+    /* Node styling */
+    .node {
+      position: absolute;
+      width: 300px;
+      background: rgba(19, 24, 36, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      overflow: visible;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .node:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .node.selected {
+      border-color: var(--accent);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent), 0 0 15px var(--accent-glow);
+    }
+    
+    .node-header {
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: move;
+      border-radius: 12px 12px 0 0;
+    }
+    
+    .node-header-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .node-close-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 2px;
+      transition: color 0.1s;
+    }
+    .node-close-btn:hover {
+      color: #ef4444;
+    }
+    
+    .node-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    /* Node Fields */
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .field-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .field-input {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.78rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .field-input:focus {
+      border-color: var(--accent);
+    }
+    .field-input[type="checkbox"] {
+      cursor: pointer;
+      width: 14px;
+      height: 14px;
+      accent-color: var(--accent);
+    }
+    
+    /* Terminal pins */
+    .pin {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      background: var(--bg-tertiary);
+      border: 2px solid var(--border);
+      border-radius: 50%;
+      cursor: crosshair;
+      z-index: 10;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .pin:hover {
+      background: var(--accent);
+      border-color: #fff;
+      transform: scale(1.2);
+    }
+    .pin.connected {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .pin-out {
+      right: -8px;
+      top: 50px;
+    }
+    .pin-in {
+      left: -8px;
+      top: 50px;
+    }
+    
+    /* Class selector list inside Input nodes */
+    .class-list-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 150px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px;
+      background: var(--bg-primary);
+    }
+    .class-item-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .class-input-name {
+      flex: 1;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 6px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.72rem;
+    }
+    .class-input-color {
+      border: none;
+      background: none;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      cursor: pointer;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    
+    .btn-add-class {
+      background: none;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 4px;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.7rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-add-class:hover {
+      border-color: var(--accent);
+      color: #fff;
+      background: rgba(168, 85, 247, 0.05);
+    }
+    
+    /* YOLO class mapping bindings UI */
+    .binding-list-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 120px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px;
+      background: var(--bg-primary);
+    }
+    .binding-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+    }
+    .binding-select {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 4px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.72rem;
+      outline: none;
+      cursor: pointer;
+    }
+    
+    /* Image Preview Frame */
+    .preview-container {
+      width: 100%;
+      height: 140px;
+      background: #07090e;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .preview-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+    .preview-placeholder {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    
+    /* Toast System */
+    #toast-container {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .toast {
+      background: rgba(19, 24, 36, 0.95);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 12px 18px;
+      color: var(--text-primary);
+      font-size: 0.8rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: toast-in 0.2s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .toast.error {
+      border-left-color: #ef4444;
+    }
+    .toast.success {
+      border-left-color: #10b981;
+    }
+    /* YOLO Log Console */
+    .yolo-logs-container {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 0.68rem;
+      color: #34d399; /* emerald green */
+      background: #05070c;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    @keyframes toast-in {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div id="header">
+    <div class="brand">
+      <div class="brand-logo">N</div>
+      <div class="brand-title">Annodes Workflow Editor</div>
+    </div>
+    <div class="actions">
+      <button class="btn-run" onclick="runFlow()">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+          <path d="M8,5.14V19.14L19,12.14L8,5.14Z"/>
+        </svg>
+        Run Flow
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Workspace -->
+  <div id="main-container">
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div class="sidebar-section">
+        <div class="section-title">Category: Input</div>
+        <div class="node-templates">
+          <div class="node-template-btn" data-type="single_image">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M8.5,13.5L11,16.5L14.5,12L19,18H5M21,19V5C21,3.89 20.1,3 19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19Z"/>
+            </svg>
+            Single Image
+          </div>
+          <div class="node-template-btn" data-type="folder">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M20,18H4V8H20M20,6H12L10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6Z"/>
+            </svg>
+            Folder
+          </div>
+        </div>
+      </div>
+      
+      <div class="sidebar-section">
+        <div class="section-title">Category: Processor</div>
+        <div class="node-templates">
+          <div class="node-template-btn" data-type="yolo_detector">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4M12,6L14.12,10.5L19,11.13L15.5,14.5L16.24,19.37L12,17.12L7.76,19.37L8.5,14.5L5,11.13L9.88,10.5L12,6Z"/>
+            </svg>
+            YOLO Detector
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Canvas -->
+    <div id="canvas-wrap">
+      <svg id="node-svg-overlay">
+        <!-- Connection lines will be rendered here dynamically -->
+      </svg>
+      <div id="nodes-container">
+        <!-- Nodes DOM elements will be injected here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div id="toast-container"></div>
+
+  <!-- Load script -->
+  <script src="/annodes.js"></script>
+</body>
+</html>

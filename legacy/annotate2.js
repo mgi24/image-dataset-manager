@@ -288,6 +288,38 @@
     }
   }
 
+  window.ann2ManualLayering = function () {
+    if (_anns.length <= 1) {
+      if (window.toast) toast('Tidak ada anotasi untuk diurutkan', 'info');
+      return;
+    }
+    const originalOrder = _anns.map((a, i) => ({ ann: a, index: i, area: _getAnnArea(a) }));
+    const sortedOrder = [...originalOrder].sort((a, b) => a.area - b.area);
+    let changed = false;
+    for (let i = 0; i < sortedOrder.length; i++) {
+      if (sortedOrder[i].index !== i) {
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      const selAnn = _selIdx >= 0 ? _anns[_selIdx] : null;
+      _pushUndoState();
+      _anns = sortedOrder.map(o => o.ann);
+      if (selAnn) {
+        _selIdx = _anns.indexOf(selAnn);
+      } else {
+        _selIdx = -1;
+      }
+      _redraw();
+      _renderAnnList();
+      if (_autosave) ann2Save();
+      if (window.toast) toast('Auto layering berhasil dijalankan ✓');
+    } else {
+      if (window.toast) toast('Urutan layer sudah optimal');
+    }
+  };
+
   async function _loadImg(idx) {
     _idx = Math.max(0, Math.min(idx, _images.length - 1));
     if (_ds && typeof window.navigate === 'function') {
@@ -2257,6 +2289,10 @@
 
   // Available YOLO models and their class names
   const YOLO_MODELS = {
+    'yolov8x-seg': {
+      label: 'YOLOv8x Segment',
+      classes: null
+    },
     'yolo26x-seg': {
       label: 'YOLO26x Segment',
       // COCO 80 class names (placeholder — fetched from server if available)
@@ -2386,6 +2422,17 @@
     deviceSel.innerHTML = _gpuList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
     deviceSel.value = selectedDevice;
 
+    // Image Size row
+    const imgszRow = document.createElement('div');
+    imgszRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom: 2px;';
+    imgszRow.innerHTML = `
+      <span style="font-size:.72rem; color:var(--text-muted); white-space:nowrap; min-width:28px;">Size</span>
+      <input type="number" class="ann2-yolo-imgsz-input" min="64" max="4096" value="640" step="32"
+        style="padding:4px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:.78rem; width:80px; box-sizing:border-box;"
+        oninput="ann2MarkSettingsDirty()">
+      <span style="font-size:.72rem; color:var(--text-muted); flex:1; text-align:left;">px</span>
+    `;
+
     // ── Conf slider ──
     const confId = entryId + '-conf-val';
     const confRow = _makeYoloSliderRow('Conf', entryId + '-conf', confId, 1, 99, 25, '%');
@@ -2409,7 +2456,7 @@
     // Add one default pair
     _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
 
-    card.append(header, deviceRow, confRow, iouRow, pairsLbl, pairsContainer);
+    card.append(header, deviceRow, imgszRow, confRow, iouRow, pairsLbl, pairsContainer);
     container.appendChild(card);
     ann2MarkSettingsDirty();
   };
@@ -2520,9 +2567,11 @@
       const confSlider = card.querySelector('[id$="-conf"]');
       const iouSlider = card.querySelector('[id$="-iou"]');
       const deviceSel = card.querySelector('.ann2-yolo-device-sel');
+      const imgszInp = card.querySelector('.ann2-yolo-imgsz-input');
       const conf = confSlider ? (parseInt(confSlider.value) / 100) : 0.25;
       const iou = iouSlider ? (parseInt(iouSlider.value) / 100) : 0.45;
       const device = deviceSel ? deviceSel.value : 'cuda:0';
+      const imgsz = imgszInp ? (parseInt(imgszInp.value) || 640) : 640;
       const pairs = [];
       card.querySelectorAll('.ann2-yolo-class-pair').forEach(row => {
         const yc = parseInt(row.querySelector('.ann2-yolo-yolo-sel')?.value || 0);
@@ -2531,7 +2580,7 @@
         const mp = (mpVal !== '' && mpVal !== null && !isNaN(parseInt(mpVal))) ? parseInt(mpVal) : null;
         pairs.push({ yolo_class_id: yc, ds_class_id: dc, max_points: mp });
       });
-      entries.push({ model, conf, iou, device, pairs, bypass });
+      entries.push({ model, conf, iou, device, imgsz, pairs, bypass });
     });
     return entries;
   }
@@ -2622,6 +2671,18 @@
       deviceSel.innerHTML = _gpuList.map(g => `<option value="${g.id}">${g.name}</option>`).join('');
       deviceSel.value = entry.device || 'cuda:0';
 
+      // Image Size row
+      const imgszVal = entry.imgsz || 640;
+      const imgszRow = document.createElement('div');
+      imgszRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom: 2px;';
+      imgszRow.innerHTML = `
+        <span style="font-size:.72rem; color:var(--text-muted); white-space:nowrap; min-width:28px;">Size</span>
+        <input type="number" class="ann2-yolo-imgsz-input" min="64" max="4096" value="${imgszVal}" step="32"
+          style="padding:4px 7px; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-family:inherit; font-size:.78rem; width:80px; box-sizing:border-box;"
+          oninput="ann2MarkSettingsDirty()">
+        <span style="font-size:.72rem; color:var(--text-muted); flex:1; text-align:left;">px</span>
+      `;
+
       const confPct = Math.round((entry.conf || 0.25) * 100);
       const iouPct = Math.round((entry.iou || 0.45) * 100);
       const confRow = _makeYoloSliderRow('Conf', entryId + '-conf', entryId + '-conf-val', 1, 99, confPct, '%');
@@ -2643,7 +2704,7 @@
         pairs.forEach(p => _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, p.yolo_class_id, p.ds_class_id, p.max_points));
       }
 
-      card.append(header, deviceRow, confRow, iouRow, pairsLbl, pairsContainer);
+      card.append(header, deviceRow, imgszRow, confRow, iouRow, pairsLbl, pairsContainer);
       container.appendChild(card);
     }
   }
@@ -2762,6 +2823,7 @@
                 model: entry.model,
                 conf: entry.conf || 0.25,
                 device: entry.device || 'cuda:0',
+                imgsz: entry.imgsz || 640,
                 pairs: entry.pairs || []
               })
             });

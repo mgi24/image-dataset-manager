@@ -260,6 +260,7 @@ class YoloDetectRequest(BaseModel):
     conf: Optional[float] = 0.25
     device: Optional[str] = 'cuda:0'
     pairs: List[YoloClassPair] = []
+    imgsz: Optional[int] = 640
 
 
 
@@ -1618,7 +1619,7 @@ def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
         
         try:
             yolo = _get_yolo_model(clean_model, model_path, device)
-            results = yolo(image_path, conf=payload.conf, device=device)
+            results = yolo(image_path, conf=payload.conf, device=device, imgsz=payload.imgsz)
         except Exception as first_err:
             print(f"Failed to load requested model {model_name}, trying fallback: {first_err}")
             fallback_model = 'yolo11n-seg' if "-seg" in model_name else 'yolo11n'
@@ -1628,7 +1629,7 @@ def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
                 base_fallback = os.path.join(BASE_DIR, fallback_file)
                 fallback_path = base_fallback if os.path.exists(base_fallback) else fallback_file
             yolo = _get_yolo_model(fallback_model, fallback_path, device)
-            results = yolo(image_path, conf=payload.conf, device=device)
+            results = yolo(image_path, conf=payload.conf, device=device, imgsz=payload.imgsz)
 
         annotations = []
         if results and len(results) > 0:
