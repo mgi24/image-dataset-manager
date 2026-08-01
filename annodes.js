@@ -18,9 +18,10 @@
   const nodesContainer = document.getElementById('nodes-container');
   const svgOverlay = document.getElementById('node-svg-overlay');
 
-  // Panning State
+  // Panning & Zooming State
   let _panX = 0;
   let _panY = 0;
+  let _zoom = 1.0;
   let _isPanning = false;
   let _startPanMouseX = 0;
   let _startPanMouseY = 0;
@@ -44,10 +45,11 @@
     // Load saved canvas layout
     await loadCanvas();
 
-    // Restore pan state
+    // Restore pan & zoom state
     _panX = parseFloat(localStorage.getItem('annodes_pan_x')) || 0;
     _panY = parseFloat(localStorage.getItem('annodes_pan_y')) || 0;
-    canvasContent.style.transform = `translate(${_panX}px, ${_panY}px)`;
+    _zoom = parseFloat(localStorage.getItem('annodes_zoom')) || 1.0;
+    canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
 
     // Mouse down listener for panning
     canvasWrap.onmousedown = (e) => {
@@ -69,6 +71,38 @@
     canvasWrap.addEventListener('mousedown', (e) => {
       if (e.button === 1) e.preventDefault();
     });
+
+    // Zoom on wheel (Zoom-to-mouse)
+    canvasWrap.onwheel = (e) => {
+      e.preventDefault();
+      
+      const zoomFactor = 1.08;
+      const wrapRect = canvasWrap.getBoundingClientRect();
+      const mouseX = e.clientX - wrapRect.left;
+      const mouseY = e.clientY - wrapRect.top;
+      
+      // Target coordinates in canvas space before zoom change
+      const canvasX = (mouseX - _panX) / _zoom;
+      const canvasY = (mouseY - _panY) / _zoom;
+      
+      // Calculate new zoom
+      if (e.deltaY < 0) {
+        _zoom = Math.min(_zoom * zoomFactor, 2.5); // max zoom 2.5
+      } else {
+        _zoom = Math.max(_zoom / zoomFactor, 0.15); // min zoom 0.15
+      }
+      
+      // Calculate new pan to keep mouse over the same canvas spot
+      _panX = mouseX - canvasX * _zoom;
+      _panY = mouseY - canvasY * _zoom;
+      
+      canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
+      localStorage.setItem('annodes_pan_x', _panX);
+      localStorage.setItem('annodes_pan_y', _panY);
+      localStorage.setItem('annodes_zoom', _zoom);
+      
+      renderConnections();
+    };
 
     // Mouse move/up listeners for connection drawing
     document.addEventListener('mousemove', onDocumentMouseMove);
@@ -745,10 +779,10 @@
       fromNodeId: nodeId,
       fromPinName: pinName,
       fromPinType: pinType,
-      startX: pinRect.left + pinRect.width/2 - contentRect.left,
-      startY: pinRect.top + pinRect.height/2 - contentRect.top,
-      mouseX: pinRect.left + pinRect.width/2 - contentRect.left,
-      mouseY: pinRect.top + pinRect.height/2 - contentRect.top
+      startX: (pinRect.left + pinRect.width/2 - contentRect.left) / _zoom,
+      startY: (pinRect.top + pinRect.height/2 - contentRect.top) / _zoom,
+      mouseX: (pinRect.left + pinRect.width/2 - contentRect.left) / _zoom,
+      mouseY: (pinRect.top + pinRect.height/2 - contentRect.top) / _zoom
     };
   }
 
@@ -776,10 +810,10 @@
       const fromRect = fromPin.getBoundingClientRect();
       const toRect = toPin.getBoundingClientRect();
 
-      const fx = fromRect.left + fromRect.width/2 - contentRect.left;
-      const fy = fromRect.top + fromRect.height/2 - contentRect.top;
-      const tx = toRect.left + toRect.width/2 - contentRect.left;
-      const ty = toRect.top + toRect.height/2 - contentRect.top;
+      const fx = (fromRect.left + fromRect.width/2 - contentRect.left) / _zoom;
+      const fy = (fromRect.top + fromRect.height/2 - contentRect.top) / _zoom;
+      const tx = (toRect.left + toRect.width/2 - contentRect.left) / _zoom;
+      const ty = (toRect.top + toRect.height/2 - contentRect.top) / _zoom;
 
       drawBezierPath(fx, fy, tx, ty, false);
     });
@@ -817,15 +851,14 @@
       const dy = e.clientY - _startPanMouseY;
       _panX = _startPanX + dx;
       _panY = _startPanY + dy;
-      canvasContent.style.transform = `translate(${_panX}px, ${_panY}px)`;
+      canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
     }
 
     // Handling Node Dragging
     if (_dragNodeState) {
-      // Delta mouse movements must not be scaled by canvas translation offsets, 
-      // but should remain absolute values in pixels.
-      const dx = e.clientX - _dragNodeState.startX;
-      const dy = e.clientY - _dragNodeState.startY;
+      // Delta mouse movements must be divided by _zoom to map from viewport pixels to local canvas coordinates
+      const dx = (e.clientX - _dragNodeState.startX) / _zoom;
+      const dy = (e.clientY - _dragNodeState.startY) / _zoom;
       const node = _nodes.find(n => n.id === _dragNodeState.nodeId);
       if (node) {
         node.x = _dragNodeState.nodeX + dx;
@@ -842,8 +875,8 @@
 
     // Handling Connection Dragging
     if (_draftConn) {
-      _draftConn.mouseX = e.clientX - contentRect.left;
-      _draftConn.mouseY = e.clientY - contentRect.top;
+      _draftConn.mouseX = (e.clientX - contentRect.left) / _zoom;
+      _draftConn.mouseY = (e.clientY - contentRect.top) / _zoom;
       renderConnections();
     }
   }
