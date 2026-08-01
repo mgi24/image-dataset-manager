@@ -74,6 +74,11 @@
 
     // Zoom on wheel (Zoom-to-mouse)
     canvasWrap.onwheel = (e) => {
+      // If wheel event happens inside a node card, do not scroll/zoom the canvas
+      if (e.target.closest('.node')) {
+        return; 
+      }
+      
       e.preventDefault();
       
       const zoomFactor = 1.08;

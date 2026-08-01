@@ -185,6 +185,7 @@
       height: 100%;
       pointer-events: none;
       z-index: 1;
+      overflow: visible;
     }
     
     #nodes-container {
@@ -194,6 +195,7 @@
       width: 100%;
       height: 100%;
       z-index: 2;
+      overflow: visible;
     }
     
     /* Connection paths */
@@ -325,7 +327,7 @@
       background: var(--accent);
       border-color: var(--accent);
     }
-    /* Multiple Pins Alignment */
+     /* Multiple Pins Alignment */
     .pins-container {
       display: flex;
       justify-content: space-between;
@@ -333,6 +335,8 @@
       padding-bottom: 10px;
       margin-bottom: 10px;
       gap: 20px;
+      width: 100%;
+      box-sizing: border-box;
     }
     .pins-column {
       display: flex;
@@ -376,15 +380,23 @@
     
     .resizable-box {
       resize: both;
-      overflow: auto;
+      overflow: hidden;
       min-width: 280px;
       min-height: 140px;
       position: relative;
     }
     
+    .resizable-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      pointer-events: none;
+    }
+    
     .preview-container.resizable-box {
       resize: both;
-      overflow: auto;
+      overflow: hidden;
     }
     
     /* Class selector list inside Input nodes */
