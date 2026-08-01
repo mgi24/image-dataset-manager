@@ -52,6 +52,31 @@ def _get_yolo_model(model_name: str, model_path: str, device: str):
                 _yolo_models[key] = yolo
     return _yolo_models[key]
 
+# SAM3 model cache
+_sam3_predictors = {}
+_sam3_model_lock = threading.Lock()
+
+def _get_sam3_predictor(model_name: str, model_path: str, device: str, conf: float):
+    global _sam3_predictors
+    key = (model_name, device, conf)
+    if key not in _sam3_predictors:
+        with _sam3_model_lock:
+            if key not in _sam3_predictors:
+                from ultralytics.models.sam import SAM3SemanticPredictor
+                overrides = dict(
+                    conf=conf,
+                    task="segment",
+                    mode="predict",
+                    model=model_path,
+                    save=False,
+                    device=device,
+                    half=False,
+                    verbose=True
+                )
+                predictor = SAM3SemanticPredictor(overrides=overrides)
+                _sam3_predictors[key] = predictor
+    return _sam3_predictors[key]
+
 # Models
 class CanvasSaveRequest(BaseModel):
     nodes: str
@@ -497,6 +522,199 @@ def run_flow(payload: RunFlowRequest):
 
             return eval_cache[cache_key]
 
+        # 3. SAM3 Node
+        elif node["type"] == "sam3":
+            # Get connected image input
+            img_source = connections_to.get((node_id, "image"))
+            if not img_source:
+                raise HTTPException(status_code=400, detail="SAM3 node is missing connected 'Image' input")
+            src_image_path = evaluate(img_source[0], img_source[1])
+
+            # Get connected class input
+            class_source = connections_to.get((node_id, "class"))
+            src_classes = []
+            if class_source:
+                src_classes = evaluate(class_source[0], class_source[1])
+
+            # Configure settings
+            sam3_model_name = node["properties"].get("model", "sam3.pt").strip()
+            sam3_imgsz = int(node["properties"].get("imgsz", 640))
+            sam3_conf = float(node["properties"].get("conf", 0.25))
+            sam3_verbose = bool(node["properties"].get("verbose", False))
+            sam3_device = node["properties"].get("device", "cuda:0")
+            prompt_bindings = node["properties"].get("prompt_bindings", {})
+
+            if not sam3_model_name.endswith(".pt"):
+                model_file = f"{sam3_model_name}.pt"
+            else:
+                model_file = sam3_model_name
+            model_path = os.path.join(MODEL_DIR, model_file)
+            if not os.path.exists(model_path):
+                raise HTTPException(status_code=400, detail=f"SAM3 model '{model_file}' not found in model/ folder")
+
+            # Extract list of prompt texts from keys of prompt_bindings
+            prompts = [p.strip() for p in prompt_bindings.keys() if p.strip()]
+
+            if not prompts:
+                # If no prompts are defined, return empty
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "annotation")] = []
+                eval_cache[(node_id, "class")] = src_classes
+                
+                # Copy image for preview (or just load it)
+                img = cv2.imread(src_image_path)
+                if img is not None:
+                    _, buffer = cv2.imencode(".jpg", img)
+                    preview_b64 = base64.b64encode(buffer).decode("utf-8")
+                    previews[node_id] = preview_b64
+                else:
+                    previews[node_id] = ""
+                
+                logs[node_id] = '<div style="color:var(--text-muted);">No prompts configured in prompt bindings. Add a prompt binding first.</div>'
+                return eval_cache[cache_key]
+
+            # Capture stdout/stderr/logging
+            import io
+            import logging
+            from contextlib import redirect_stdout, redirect_stderr
+            
+            yolo_logger = logging.getLogger("ultralytics")
+            log_capture_string = io.StringIO()
+            ch = logging.StreamHandler(log_capture_string)
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(logging.Formatter("%(message)s"))
+            yolo_logger.addHandler(ch)
+            
+            f_stdout = io.StringIO()
+            f_stderr = io.StringIO()
+
+            try:
+                predictor = _get_sam3_predictor(model_file, model_path, sam3_device, sam3_conf)
+                predictor.set_image(src_image_path)
+                with redirect_stdout(f_stdout), redirect_stderr(f_stderr):
+                    results = predictor(text=prompts)
+                verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
+            except Exception as e:
+                verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"
+                raise HTTPException(status_code=500, detail=f"SAM3 inference error: {str(e)}")
+            finally:
+                yolo_logger.removeHandler(ch)
+
+            # Process SAM3 outputs
+            sam3_annotations = []
+            detected_objects_summary = []
+            
+            # Load raw image to draw SAM3 preview
+            img = cv2.imread(src_image_path)
+            if img is None:
+                raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for SAM3 preview")
+            h, w = img.shape[:2]
+
+            if results and len(results) > 0:
+                res = results[0]
+                boxes = res.boxes
+                masks = res.masks
+
+                if boxes is not None:
+                    for i, box in enumerate(boxes):
+                        cls_id = int(box.cls[0].item())
+                        conf_val = float(box.conf[0].item())
+                        
+                        # Get prompt string for this class id
+                        prompt_str = prompts[cls_id] if cls_id < len(prompts) else f"Class {cls_id}"
+                        
+                        # Map to custom class index if bound
+                        bind_val = prompt_bindings.get(prompt_str)
+                        
+                        target_class_name = prompt_str
+                        target_color = "#3b82f6" # default blue
+                        mapped_class_id = cls_id
+                        
+                        if bind_val is not None and bind_val != "" and int(bind_val) < len(src_classes):
+                            mapped_class_id = int(bind_val)
+                            target_class_name = src_classes[mapped_class_id]["name"]
+                            target_color = src_classes[mapped_class_id]["color"]
+
+                        bgr = hex_to_bgr(target_color)
+
+                        # Check coordinates
+                        coords = []
+                        is_segment = False
+                        if masks is not None and len(masks.xyn) > i:
+                            poly_pts = masks.xyn[i]
+                            if len(poly_pts) >= 3:
+                                # Flatten coordinates
+                                for pt in poly_pts:
+                                    coords.extend([float(pt[0]), float(pt[1])])
+                                is_segment = True
+                                
+                                # Draw preview polygon
+                                pts_px = np.array([[int(pt[0]*w), int(pt[1]*h)] for pt in poly_pts], dtype=np.int32)
+                                overlay = img.copy()
+                                cv2.fillPoly(overlay, [pts_px], bgr)
+                                cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                                cv2.polylines(img, [pts_px], True, bgr, 2)
+                                min_y_idx = np.argmin(pts_px[:, 1])
+                                lbl_x = int(pts_px[min_y_idx][0])
+                                lbl_y = int(pts_px[min_y_idx][1])
+                        
+                        if not is_segment:
+                            # bounding box normalized coordinates
+                            xywhn = box.xywhn[0].cpu().numpy()
+                            coords = [float(c) for c in xywhn] # [xc, yc, w, h]
+                            
+                            # Draw preview box
+                            xyxy = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                            overlay = img.copy()
+                            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                            cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
+                            cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+                            lbl_x, lbl_y = x1, y1
+
+                        # Draw text label on SAM3 preview
+                        lbl_txt = f"{target_class_name} {conf_val:.2f}"
+                        (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                        cv2.rectangle(img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                        cv2.putText(img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+                        sam3_annotations.append({
+                            "class_id": mapped_class_id,
+                            "coords": coords,
+                            "is_segment": is_segment,
+                            "confidence": conf_val
+                        })
+                        
+                        detected_objects_summary.append({
+                            "class_name": target_class_name,
+                            "confidence": conf_val
+                        })
+
+            # Base64 encode SAM3 preview image
+            _, buffer = cv2.imencode(".jpg", img)
+            preview_b64 = base64.b64encode(buffer).decode("utf-8")
+            previews[node_id] = preview_b64
+
+            # Generate SAM3 node logs HTML
+            log_html = ""
+            if verbose_log:
+                escaped_verbose = verbose_log.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                log_html += f'<div style="color:var(--text-muted); border-bottom:1px dashed var(--border); padding-bottom:6px; margin-bottom:6px; font-weight:normal;">{escaped_verbose}</div>'
+            if detected_objects_summary:
+                log_html += "<div><strong>Detections:</strong></div>"
+                for det in detected_objects_summary:
+                    log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}%</div>"
+            else:
+                log_html += '<div style="color:var(--text-muted);">No detections</div>'
+            logs[node_id] = log_html
+
+            # Cache SAM3 output pins
+            eval_cache[(node_id, "image")] = src_image_path
+            eval_cache[(node_id, "annotation")] = sam3_annotations
+            eval_cache[(node_id, "class")] = src_classes
+
+            return eval_cache[cache_key]
+
         raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
 
     # Process Preview Nodes (leaf nodes)
@@ -585,10 +803,10 @@ def run_flow(payload: RunFlowRequest):
             preview_b64 = base64.b64encode(buffer).decode("utf-8")
             previews[p_node_id] = preview_b64
 
-    # If no Preview nodes found, evaluate the YOLO node directly so we get its outputs
+    # If no Preview nodes found, evaluate the YOLO or SAM3 node directly so we get its outputs
     if not preview_nodes_found:
         for n in payload.nodes:
-            if n["type"] == "yolo_detector":
+            if n["type"] in ("yolo_detector", "sam3"):
                 evaluate(n["id"], "image")
 
     # Find the active input node to return filename
