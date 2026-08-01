@@ -115,8 +115,8 @@ def list_gpus():
                 name = torch.cuda.get_device_name(i)
                 mem_total = torch.cuda.get_device_properties(i).total_memory // (1024 * 1024)
                 gpus.append({"id": f"cuda:{i}", "name": f"GPU {i}: {name} ({mem_total} MB)"})
-        if not gpus:
-            gpus.append({"id": "cpu", "name": "CPU"})
+        # Always append CPU option
+        gpus.append({"id": "cpu", "name": "CPU"})
         return {"success": True, "gpus": gpus}
     except Exception as e:
         return {"success": False, "gpus": [{"id": "cpu", "name": "CPU"}], "error": str(e)}

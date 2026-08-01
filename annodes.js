@@ -132,6 +132,11 @@
       const d = await r.json();
       if (d.success) _cachedGpus = d.gpus || [];
     } catch (e) { console.warn('Failed to fetch GPUs', e); }
+
+    // Ensure CPU is always an option in the list
+    if (!_cachedGpus.some(g => g.id === 'cpu')) {
+      _cachedGpus.push({ id: 'cpu', name: 'CPU' });
+    }
   }
 
   // --- Node Editor Core Operations ---
