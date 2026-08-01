@@ -3,10 +3,11 @@ import os
 import sys
 
 URL = "https://huggingface.co/AEmotionStudio/sam3.1/resolve/main/sam3.1_multiplex.pt"
-OUTPUT_FILE = "sam3.1.pt"
+OUTPUT_FILE = os.path.join("model", "sam3.1.pt")
 
 
 def download_file():
+    os.makedirs("model", exist_ok=True)
     print(f"Starting download from {URL}...")
     print(f"Saving to {OUTPUT_FILE}...")
     

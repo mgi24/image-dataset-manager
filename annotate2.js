@@ -8,6 +8,7 @@
   let _imgEl = null;
   let _anns = [];        // [{class_id, points, type:'bbox'|'polygon', locked}]
   let _selIdx = -1;
+  let _hoverIdx = -1;
   let _tool = 'drag';
   let _tags = [];
   let _curTags = [];
@@ -15,7 +16,20 @@
   let _datasetType = 'object_detection'; // default setting
   let _autosave = false;
   let _autoLayering = false;
-  let _hoverIdx = -1;
+  // Dirty & Navigation Locks
+  let _isDirty = false;
+  let _loadedAnnsSnapshot = '[]';
+  let _isSaving = false;
+  let _isNavigating = false;
+
+  function _markDirty() {
+    _isDirty = true;
+  }
+
+  function _isAnnsChanged() {
+    if (_isDirty) return true;
+    return JSON.stringify(_anns) !== _loadedAnnsSnapshot;
+  }
 
   // Magic Selection state
   let _magicPts = [];           // [{x, y, label}]  label=1 pos, 0 neg
@@ -271,7 +285,6 @@
     }
     if (changed) {
       _anns = sortedOrder.map(o => o.ann);
-      ann2Save();
     }
   }
 
@@ -290,26 +303,39 @@
     const imgObj = _images[_idx];
     _anns = (imgObj.annotations || []).map(a => ({
       class_id: a.class_id,
-      points: a.points.map(p => [...p]),
-      type: a.points.length === 2 ? 'bbox' : 'polygon',
+      points: (a.points || []).map(p => [...p]),
+      type: (a.points || []).length === 2 ? 'bbox' : 'polygon',
       locked: false
     }));
+    _isDirty = false;
+    _loadedAnnsSnapshot = JSON.stringify(_anns);
     _applyAutoLayering();
     _selIdx = -1;
     const ctr = document.getElementById('ann2-img-counter');
     if (ctr) ctr.textContent = `${_idx + 1} / ${_images.length}`;
+    // Render annotation list immediately so count is visible while image loads
+    _renderAnnList();
     await _fetchImgTags(imgObj.filename);
     _renderTagsArea();
     _imgEl = new Image();
+
+    // Show loading overlay while image loads
+    const loadingOverlay = document.getElementById('ann2-img-loading-overlay');
+    if (loadingOverlay) loadingOverlay.style.display = 'flex';
+
     _imgEl.onload = () => {
+      if (loadingOverlay) loadingOverlay.style.display = 'none';
       setTimeout(() => {
         _fitImg();
         _redraw();
         _renderAnnList();
       }, 50);
     };
-    _imgEl.onerror = () => { _imgEl = null; _redraw(); };
-    _imgEl.src = `/dataset/${encodeURIComponent(_ds.name)}/annotate/images/${encodeURIComponent(imgObj.filename)}`;
+    _imgEl.onerror = () => {
+      if (loadingOverlay) loadingOverlay.style.display = 'none';
+      _imgEl = null; _redraw();
+    };
+    _imgEl.src = `/dataset/${encodeURIComponent(_ds.name)}/annotate/images/${imgObj.filename.split('/').map(p => encodeURIComponent(p)).join('/')}`;
   }
 
   async function _fetchImgTags(filename) {
@@ -384,6 +410,7 @@
       if ((k === 'p' || k === 'P') && _datasetType !== 'object_detection') _setTool('polygon');
       if (k === 'e' || k === 'E') _setTool('edit');
       if (k === 'm' || k === 'M') _setTool('magic');
+      if (k === 'k' || k === 'K') { e.preventDefault(); ann2ToggleManuallyApprovedTag(); }
       if ((e.ctrlKey || e.metaKey) && isZ) {
         e.preventDefault();
         _undo();
@@ -474,7 +501,7 @@
     const btn = document.getElementById(`ann2-tool-${t}`);
     if (btn) btn.classList.add('active-tool');
     const c = document.getElementById('ann2-canvas');
-    if (c) c.style.cursor = t === 'grab' ? 'grab' : 'crosshair';
+    if (c) c.style.cursor = (t === 'drag' || t === 'grab') ? 'grab' : 'crosshair';
 
     const autoAnnLabel = document.getElementById('ann2-auto-annotate-label');
     const settingsBtn = document.getElementById('ann2-settings-btn');
@@ -490,14 +517,11 @@
       if (chk) {
         _autoAnnotateActive = chk.checked;
       }
-      ann2OpenAutoSettingsModal();
     } else {
       ann2CloseAutoSettingsModal();
     }
 
-    if (t === 'magic') {
-      ann2OpenMagicSettingsModal();
-    } else {
+    if (t !== 'magic') {
       ann2CloseMagicSettingsModal();
     }
     _updateShortcutHints();
@@ -507,12 +531,16 @@
 
   // ── Coords ──
   function _c2i(cx, cy) {
-    if (!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight || !_scale) return { x: 0, y: 0 };
-    return { x: (cx - _pan.x) / (_imgEl.naturalWidth * _scale), y: (cy - _pan.y) / (_imgEl.naturalHeight * _scale) };
+    if (!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return { x: 0, y: 0 };
+    if (!_scale || _scale <= 0) _fitImg();
+    const sc = _scale || 1;
+    return { x: (cx - (_pan.x || 0)) / (_imgEl.naturalWidth * sc), y: (cy - (_pan.y || 0)) / (_imgEl.naturalHeight * sc) };
   }
   function _i2c(ix, iy) {
-    if (!_imgEl) return { x: 0, y: 0 };
-    return { x: ix * _imgEl.naturalWidth * _scale + _pan.x, y: iy * _imgEl.naturalHeight * _scale + _pan.y };
+    if (!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return { x: 0, y: 0 };
+    if (!_scale || _scale <= 0) _fitImg();
+    const sc = _scale || 1;
+    return { x: ix * _imgEl.naturalWidth * sc + (_pan.x || 0), y: iy * _imgEl.naturalHeight * sc + (_pan.y || 0) };
   }
   function _clp(v) { return Math.max(0, Math.min(1, v)); }
 
@@ -852,6 +880,7 @@
         if (changed) {
           _undoStack.push(_beforeEditSnapshot);
           _redoStack = [];
+          _isDirty = true;
         }
         _beforeEditSnapshot = null;
       }
@@ -865,6 +894,7 @@
         if (changed) {
           _undoStack.push(_beforeEditSnapshot);
           _redoStack = [];
+          _isDirty = true;
         }
         _beforeEditSnapshot = null;
       }
@@ -1004,28 +1034,26 @@
     if (!_imgEl || !_imgEl.naturalWidth || !_imgEl.naturalHeight) return;
     ctx.drawImage(_imgEl, _pan.x, _pan.y, _imgEl.naturalWidth * _scale, _imgEl.naturalHeight * _scale);
 
-    // Dimming overlay for Edit Mode or Magic Selection with Shift / Replace active
-    if (_tool === 'edit' || (_tool === 'magic' && (_shiftHeld || _magicReplaceIdx >= 0))) {
+    // Dimming overlay for Edit Mode or Magic Selection (only when an annotation is actively hovered/selected)
+    const hoverAnn = _hoverIdx >= 0 ? _anns[_hoverIdx] : (_selIdx >= 0 ? _anns[_selIdx] : null);
+    if ((_tool === 'edit' || (_tool === 'magic' && (_shiftHeld || _magicReplaceIdx >= 0))) && hoverAnn) {
       ctx.save();
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
       ctx.beginPath();
       // Outer rect
       ctx.rect(0, 0, canvas.width, canvas.height);
 
-      const hoverAnn = _hoverIdx >= 0 ? _anns[_hoverIdx] : (_selIdx >= 0 ? _anns[_selIdx] : null);
-      if (hoverAnn) {
-        if (hoverAnn.type === 'bbox') {
-          const [[x1, y1], [x2, y2]] = hoverAnn.points;
-          const c1 = _i2c(Math.min(x1, x2), Math.min(y1, y2)), c2 = _i2c(Math.max(x1, x2), Math.max(y1, y2));
-          ctx.rect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
-        } else {
-          hoverAnn.points.forEach((p, pi) => {
-            const c = _i2c(p[0], p[1]);
-            if (pi === 0) ctx.moveTo(c.x, c.y);
-            else ctx.lineTo(c.x, c.y);
-          });
-          ctx.closePath();
-        }
+      if (hoverAnn.type === 'bbox') {
+        const [[x1, y1], [x2, y2]] = hoverAnn.points;
+        const c1 = _i2c(Math.min(x1, x2), Math.min(y1, y2)), c2 = _i2c(Math.max(x1, x2), Math.max(y1, y2));
+        ctx.rect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+      } else {
+        hoverAnn.points.forEach((p, pi) => {
+          const c = _i2c(p[0], p[1]);
+          if (pi === 0) ctx.moveTo(c.x, c.y);
+          else ctx.lineTo(c.x, c.y);
+        });
+        ctx.closePath();
       }
       ctx.fill('evenodd');
       ctx.restore();
@@ -1465,45 +1493,119 @@
     }
   };
 
-  // ── Navigation ──
-  window.ann2Prev = () => {
-    if (_autosave) {
-      ann2Save().then(() => { if (_idx > 0) _loadImg(_idx - 1); });
+  window.ann2ToggleManuallyApprovedTag = function() {
+    const TAG_NAME = 'manually approved';
+    if (!_curTags.includes(TAG_NAME)) {
+      _curTags.push(TAG_NAME);
+      if (window.toast) toast('Tag "manually approved" ditambahkan ✓');
     } else {
-      if (_idx > 0) _loadImg(_idx - 1);
+      _curTags = _curTags.filter(t => t !== TAG_NAME);
+      if (window.toast) toast('Tag "manually approved" dihapus');
     }
+    _renderTagsArea();
+    _updateShortcutHints();
+    window.ann2SaveTags();
+  };
+
+  // ── Navigation ──
+  async function _navigateToImg(targetIdx) {
+    if (_isNavigating || targetIdx < 0 || targetIdx >= _images.length || targetIdx === _idx) return;
+    _isNavigating = true;
+
+    try {
+      if (_autosave && _isAnnsChanged()) {
+        const curIdx = _idx;
+        const curAnnsSnapshot = JSON.parse(JSON.stringify(_anns));
+        await ann2Save(curIdx, curAnnsSnapshot);
+      }
+
+      _tempAutoAnns = [];
+      _tempAnnSelIdx = -1; _tempAnnHoverIdx = -1; _tempAnnSelectedVertex = -1;
+      _polyPts = []; _drawing = false; _drawStart = null;
+      _magicPts = []; _magicPreview = null; _magicReplaceIdx = -1;
+
+      await _loadImg(targetIdx);
+    } finally {
+      _isNavigating = false;
+    }
+  }
+
+  window.ann2Prev = () => {
+    if (_idx > 0) _navigateToImg(_idx - 1);
   };
   window.ann2Next = () => {
-    if (_autosave) {
-      ann2Save().then(() => { if (_idx < _images.length - 1) _loadImg(_idx + 1); });
-    } else {
-      if (_idx < _images.length - 1) _loadImg(_idx + 1);
-    }
+    if (_idx < _images.length - 1) _navigateToImg(_idx + 1);
   };
 
   // ── Save ──
-  window.ann2Save = async function () {
-    if (!_ds || !_images.length) return;
-    const imgObj = _images[_idx];
+  window.ann2Save = async function (forcedIdx, forcedAnns) {
+    if (!_ds || !_images.length) return false;
+
+    const saveIdx = (typeof forcedIdx === 'number') ? forcedIdx : _idx;
+    if (saveIdx < 0 || saveIdx >= _images.length) return false;
+
+    const imgObj = _images[saveIdx];
+    const annsToSave = forcedAnns ? forcedAnns : (saveIdx === _idx ? _anns : imgObj.annotations);
+
+    // Skip saving completely if nothing was modified and not forced
+    if (forcedIdx === undefined && !forcedAnns && !_isAnnsChanged()) {
+      return true;
+    }
+
     const btn = document.getElementById('ann2-save-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    if (btn && saveIdx === _idx) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
     let labelContent = '';
-    _anns.forEach(ann => {
+    (annsToSave || []).forEach(ann => {
       const pts = ann.points.flat().map(v => v.toFixed(6)).join(' ');
       labelContent += `${ann.class_id} ${pts}\n`;
     });
+
     try {
+      _isSaving = true;
       const r = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/annotate/save-label`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: imgObj.filename, label: labelContent })
       });
       if (!r.ok) throw new Error('Save failed');
-      imgObj.annotations = _anns.map(a => ({ class_id: a.class_id, points: a.points.map(p => [...p]) }));
-      if (window.toast) toast('Tersimpan ✓');
+
+      imgObj.annotations = (annsToSave || []).map(a => ({ class_id: a.class_id, points: a.points.map(p => [...p]) }));
+
+      if (saveIdx === _idx) {
+        _isDirty = false;
+        _loadedAnnsSnapshot = JSON.stringify(_anns);
+      }
+
+      // Update sessionStorage so page refresh shows correct annotations
+      if (_ds) {
+        try {
+          const cacheKey = 'annData_' + _ds.name;
+          const raw = sessionStorage.getItem(cacheKey);
+          if (raw) {
+            const cached = JSON.parse(raw);
+            if (cached && cached.images) {
+              const cachedImg = cached.images.find(i => i.filename === imgObj.filename);
+              if (cachedImg) {
+                cachedImg.annotations = imgObj.annotations;
+                sessionStorage.setItem(cacheKey, JSON.stringify(cached));
+              }
+            }
+          }
+        } catch(e) {}
+      }
+
+      if (window.toast && forcedIdx === undefined) toast('Tersimpan ✓');
+      return true;
     } catch (e) {
       if (window.toast) toast('Gagal: ' + e.message, 'err');
+      return false;
+    } finally {
+      _isSaving = false;
+      if (btn && saveIdx === _idx) {
+        btn.disabled = false;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor;margin-right:4px"><path d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z"/></svg>Save (Ctrl+S)';
+      }
     }
-    if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:13px;height:13px;fill:currentColor;margin-right:4px"><path d="M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z"/></svg>Save (Ctrl+S)'; }
   };
 
   window.ann2ToggleAutosave = async function (checked) {
@@ -1744,36 +1846,41 @@
         `;
       }
     } else if (_tool === 'autoann') {
+      if (_tempAutoAnns && _tempAutoAnns.length > 0) {
+        html += `
+          <div class="ann2-shortcut-badge" onclick="ann2ConfirmAutoAnns()" style="cursor:pointer; background:rgba(34,197,94,0.18); border:1px solid rgba(34,197,94,0.4); color:#4ade80;"><kbd style="background:rgba(34,197,94,0.3); color:#fff;">Enter</kbd> Approve (${_tempAutoAnns.length})</div>
+          <div class="ann2-shortcut-badge" onclick="ann2CancelAutoAnns()" style="cursor:pointer;"><kbd>Esc</kbd> Batal</div>
+        `;
+        if (_tempAnnSelIdx >= 0) {
+          if (_tempAnnSelectedVertex >= 0) {
+            html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Vertex</div>`;
+          } else {
+            html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Ann</div>`;
+          }
+        }
+      } else {
+        html += `
+          <div class="ann2-shortcut-badge" style="opacity:0.8;"><kbd>Enter</kbd> Approve / Konfirmasi</div>
+        `;
+      }
       if (_autoAnnotateActive) {
         html += `
           <div class="ann2-shortcut-badge"><kbd>S</kbd> Process &amp; Next (Loop)</div>
         `;
       } else {
-        if (_tempAutoAnns && _tempAutoAnns.length > 0) {
-          html += `
-            <div class="ann2-shortcut-badge"><kbd>Enter</kbd> Confirm Scan</div>
-            <div class="ann2-shortcut-badge"><kbd>Esc</kbd> Cancel Scan</div>
-          `;
-          if (_tempAnnSelIdx >= 0) {
-            if (_tempAnnSelectedVertex >= 0) {
-              html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Vertex</div>`;
-            } else {
-              html += `<div class="ann2-shortcut-badge"><kbd>Del</kbd> Delete Ann</div>`;
-            }
-          }
-        } else {
-          html += `
-            <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan Image</div>
-          `;
-        }
+        html += `
+          <div class="ann2-shortcut-badge"><kbd>S</kbd> Scan / Auto Annotate</div>
+        `;
       }
     }
 
     // Global navigation and actions
     const undoCount = _undoStack.length;
     const redoCount = _redoStack.length;
+    const hasApprovedTag = _curTags && _curTags.includes('manually approved');
     html += `
       <div style="width:100%;height:1px;background:var(--border);margin:4px 0;"></div>
+      <div class="ann2-shortcut-badge" onclick="ann2ToggleManuallyApprovedTag()" style="cursor:pointer; ${hasApprovedTag ? 'background:rgba(59,130,246,0.18); border:1px solid rgba(59,130,246,0.4); color:#60a5fa;' : ''}"><kbd style="${hasApprovedTag ? 'background:rgba(59,130,246,0.3); color:#fff;' : ''}">K</kbd> ${hasApprovedTag ? 'Tag "manually approved" ✓' : 'Tag "manually approved"'}</div>
       <div class="ann2-shortcut-badge"><kbd>A</kbd> / <kbd>←</kbd> Prev Image</div>
       <div class="ann2-shortcut-badge"><kbd>D</kbd> / <kbd>→</kbd> Next Image</div>
       <div class="ann2-shortcut-badge"><kbd>Ctrl+S</kbd> Save</div>
@@ -1789,6 +1896,7 @@
   function _pushUndoState() {
     _undoStack.push(JSON.parse(JSON.stringify(_anns)));
     _redoStack = [];
+    _isDirty = true;
     _updateShortcutHints();
   }
 
@@ -2153,6 +2261,10 @@
       label: 'YOLO26x Segment',
       // COCO 80 class names (placeholder — fetched from server if available)
       classes: null // will be fetched/cached
+    },
+    'platLarge': {
+      label: 'platLarge (License Plate)',
+      classes: null
     }
   };
 
@@ -2238,7 +2350,29 @@
     delBtn.textContent = '✕';
     delBtn.onclick = () => { card.remove(); ann2MarkSettingsDirty(); };
 
-    header.append(modelLbl, modelSel, delBtn);
+    // Bypass checkbox
+    const bypassWrap = document.createElement('label');
+    bypassWrap.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:.72rem; color:var(--text-muted); cursor:pointer; user-select:none; margin-left:auto; flex-shrink:0;';
+    bypassWrap.title = 'Bypass: Jangan jalankan YOLO ini saat auto annotate';
+
+    const bypassChk = document.createElement('input');
+    bypassChk.type = 'checkbox';
+    bypassChk.className = 'ann2-yolo-bypass-chk';
+    bypassChk.style.cssText = 'cursor:pointer; accent-color:#fb923c;';
+    bypassChk.onchange = function () {
+      if (this.checked) {
+        card.classList.add('ann2-yolo-bypassed');
+      } else {
+        card.classList.remove('ann2-yolo-bypassed');
+      }
+      ann2MarkSettingsDirty();
+    };
+
+    const bypassSpan = document.createElement('span');
+    bypassSpan.textContent = 'Bypass';
+
+    bypassWrap.append(bypassChk, bypassSpan);
+    header.append(modelLbl, modelSel, bypassWrap, delBtn);
 
     // Device selector row
     const deviceRow = document.createElement('div');
@@ -2324,7 +2458,7 @@
     });
   }
 
-  function _addYoloPairRowDOM(container, yoloNames, dsNames, yoloClassId, dsClassId) {
+  function _addYoloPairRowDOM(container, yoloNames, dsNames, yoloClassId, dsClassId, maxPoints) {
     const row = document.createElement('div');
     row.className = 'ann2-yolo-class-pair';
 
@@ -2342,13 +2476,25 @@
     _populateDsSel(dsSel, dsNames, dsClassId !== null ? dsClassId : 0);
     dsSel.onchange = () => ann2MarkSettingsDirty();
 
+    const maxPtsInp = document.createElement('input');
+    maxPtsInp.type = 'number';
+    maxPtsInp.className = 'ann2-yolo-maxpts-input';
+    maxPtsInp.min = '3';
+    maxPtsInp.max = '100';
+    maxPtsInp.placeholder = 'Max Pts';
+    maxPtsInp.title = 'Max Points: Kosongkan/0 untuk Unlimited (misal: 4 untuk Plat Nomor)';
+    if (maxPoints !== null && maxPoints !== undefined && maxPoints > 0) {
+      maxPtsInp.value = maxPoints;
+    }
+    maxPtsInp.oninput = () => ann2MarkSettingsDirty();
+
     const delBtn = document.createElement('button');
     delBtn.className = 'ann2-pair-del';
     delBtn.textContent = '×';
     delBtn.title = 'Remove pair';
     delBtn.onclick = () => { row.remove(); ann2MarkSettingsDirty(); };
 
-    row.append(yoloSel, arrow, dsSel, delBtn);
+    row.append(yoloSel, arrow, dsSel, maxPtsInp, delBtn);
     container.appendChild(row);
   }
 
@@ -2360,7 +2506,7 @@
     const modelKey = card.dataset.model;
     const yoloNames = _yoloClassCache[modelKey] || [];
     const dsNames = _ds?.classes?.names || [];
-    _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
+    _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null, null);
     ann2MarkSettingsDirty();
   };
 
@@ -2369,6 +2515,8 @@
     const entries = [];
     document.querySelectorAll('.ann2-yolo-entry').forEach(card => {
       const model = card.dataset.model;
+      const bypassChk = card.querySelector('.ann2-yolo-bypass-chk');
+      const bypass = bypassChk ? bypassChk.checked : false;
       const confSlider = card.querySelector('[id$="-conf"]');
       const iouSlider = card.querySelector('[id$="-iou"]');
       const deviceSel = card.querySelector('.ann2-yolo-device-sel');
@@ -2379,9 +2527,11 @@
       card.querySelectorAll('.ann2-yolo-class-pair').forEach(row => {
         const yc = parseInt(row.querySelector('.ann2-yolo-yolo-sel')?.value || 0);
         const dc = parseInt(row.querySelector('.ann2-yolo-ds-sel')?.value || 0);
-        pairs.push({ yolo_class_id: yc, ds_class_id: dc });
+        const mpVal = row.querySelector('.ann2-yolo-maxpts-input')?.value;
+        const mp = (mpVal !== '' && mpVal !== null && !isNaN(parseInt(mpVal))) ? parseInt(mpVal) : null;
+        pairs.push({ yolo_class_id: yc, ds_class_id: dc, max_points: mp });
       });
-      entries.push({ model, conf, iou, device, pairs });
+      entries.push({ model, conf, iou, device, pairs, bypass });
     });
     return entries;
   }
@@ -2425,12 +2575,40 @@
         });
         ann2MarkSettingsDirty();
       };
+
       const delBtn2 = document.createElement('button');
       delBtn2.className = 'ann2-yolo-del-btn';
       delBtn2.title = 'Remove';
       delBtn2.textContent = '✕';
       delBtn2.onclick = () => { card.remove(); ann2MarkSettingsDirty(); };
-      header.append(modelLbl, modelSel, delBtn2);
+
+      // Bypass checkbox
+      const bypassWrap2 = document.createElement('label');
+      bypassWrap2.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:.72rem; color:var(--text-muted); cursor:pointer; user-select:none; margin-left:auto; flex-shrink:0;';
+      bypassWrap2.title = 'Bypass: Jangan jalankan YOLO ini saat auto annotate';
+
+      const bypassChk2 = document.createElement('input');
+      bypassChk2.type = 'checkbox';
+      bypassChk2.className = 'ann2-yolo-bypass-chk';
+      bypassChk2.style.cssText = 'cursor:pointer; accent-color:#fb923c;';
+      if (entry.bypass) {
+        bypassChk2.checked = true;
+        card.classList.add('ann2-yolo-bypassed');
+      }
+      bypassChk2.onchange = function () {
+        if (this.checked) {
+          card.classList.add('ann2-yolo-bypassed');
+        } else {
+          card.classList.remove('ann2-yolo-bypassed');
+        }
+        ann2MarkSettingsDirty();
+      };
+
+      const bypassSpan2 = document.createElement('span');
+      bypassSpan2.textContent = 'Bypass';
+
+      bypassWrap2.append(bypassChk2, bypassSpan2);
+      header.append(modelLbl, modelSel, bypassWrap2, delBtn2);
 
       // Device selector row
       const deviceRow = document.createElement('div');
@@ -2460,9 +2638,9 @@
       pairsContainer.style.cssText = 'display:flex;flex-direction:column;gap:5px;';
       const pairs = entry.pairs || [];
       if (pairs.length === 0) {
-        _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null);
+        _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, null, null, null);
       } else {
-        pairs.forEach(p => _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, p.yolo_class_id, p.ds_class_id));
+        pairs.forEach(p => _addYoloPairRowDOM(pairsContainer, yoloNames, dsNames, p.yolo_class_id, p.ds_class_id, p.max_points));
       }
 
       card.append(header, deviceRow, confRow, iouRow, pairsLbl, pairsContainer);
@@ -2513,19 +2691,22 @@
   window.ann2StartAutoAnnotate = async function () {
     if (!_ds || !_images.length || _autoProcessing) return;
     const isNoneModel = _autoAnnotateSettings.model === 'none';
-    const hasYolo = (_autoAnnotateSettings.yolo_entries || []).length > 0;
+    const activeYoloEntries = (_autoAnnotateSettings.yolo_entries || []).filter(e => !e.bypass);
+    const hasActiveYolo = activeYoloEntries.length > 0;
 
     if (!isNoneModel && (!_autoAnnotateSettings.prompts || _autoAnnotateSettings.prompts.length === 0)) {
       if (window.toast) toast('Set prompts dulu di settings panel', 'err');
       return;
     }
-    if (isNoneModel && !hasYolo) {
-      if (window.toast) toast('Tambahkan minimal satu YOLO entry', 'err');
+    if (isNoneModel && !hasActiveYolo) {
+      if (window.toast) toast('Tambahkan atau aktifkan minimal satu YOLO entry', 'err');
       return;
     }
 
     _autoProcessing = true;
-    const startMsg = hasYolo ? 'YOLO Detection...' : `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`;
+    const startMsg = !isNoneModel 
+      ? `SAM ${_autoAnnotateSettings.model} — ${_images[_idx]?.filename || ''}`
+      : `YOLO Detection — ${_images[_idx]?.filename || ''}`;
     _showProcessing(true, startMsg);
 
     try {
@@ -2534,41 +2715,7 @@
       // ── Collect all candidate annotations ──
       let allAnnotations = [];
 
-      // 1) YOLO entries (processed first to prioritize YOLO)
-      if (hasYolo) {
-        _showProcessing(true, `Running YOLO detectors...`);
-        for (const entry of (_autoAnnotateSettings.yolo_entries || [])) {
-          try {
-            const yr = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/yolo-detect`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                filename: imgObj.filename,
-                model: entry.model,
-                conf: entry.conf || 0.25,
-                device: entry.device || 'cuda:0',
-                pairs: entry.pairs || []
-              })
-            });
-            const yd = await yr.json();
-            if (yr.ok && yd.success && yd.annotations) {
-              allAnnotations = allAnnotations.concat(yd.annotations.map(a => ({
-                class_id: a.class_id,
-                points: a.points.map(p => [...p]),
-                type: a.type || 'bbox',
-                _iou_threshold: entry.iou || 0.45
-              })));
-            } else {
-              if (window.toast) toast(yd.error || 'YOLO detect failed', 'err');
-            }
-          } catch (ye) {
-            console.warn('YOLO detect error:', ye);
-            if (window.toast) toast(ye.message || 'YOLO detect error', 'err');
-          }
-        }
-      }
-
-      // 2) SAM auto-annotate (unless None)
+      // 1) SAM auto-annotate (unless None) -> Priority 1: SAM
       if (!isNoneModel) {
         _showProcessing(true, `SAM ${_autoAnnotateSettings.model} — ${imgObj.filename || ''}`);
         const resp = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/sam-auto-annotate`, {
@@ -2599,6 +2746,54 @@
           })));
         } else if (!resp.ok || !data.success) {
           if (window.toast) toast(data.error || 'SAM failed', 'err');
+        }
+      }
+
+      // 2) YOLO entries (processed top to bottom for active entries) -> Priority 2: YOLO
+      if (hasActiveYolo) {
+        for (const entry of activeYoloEntries) {
+          _showProcessing(true, `Running YOLO (${entry.model})...`);
+          try {
+            const yr = await fetch(`/api/dataset/${encodeURIComponent(_ds.name)}/yolo-detect`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                filename: imgObj.filename,
+                model: entry.model,
+                conf: entry.conf || 0.25,
+                device: entry.device || 'cuda:0',
+                pairs: entry.pairs || []
+              })
+            });
+            const yd = await yr.json();
+            if (yr.ok && yd.success && yd.annotations) {
+              const maxPtsMap = {};
+              (entry.pairs || []).forEach(p => {
+                if (p.max_points && p.max_points >= 3) {
+                  maxPtsMap[p.ds_class_id] = p.max_points;
+                }
+              });
+
+              allAnnotations = allAnnotations.concat(yd.annotations.map(a => {
+                let pts = a.points.map(p => [...p]);
+                const targetMaxPts = maxPtsMap[a.class_id];
+                if (targetMaxPts && pts.length > targetMaxPts) {
+                  pts = _simplifyPolygonToMaxPoints(pts, targetMaxPts);
+                }
+                return {
+                  class_id: a.class_id,
+                  points: pts,
+                  type: a.type || 'bbox',
+                  _iou_threshold: entry.iou || 0.45
+                };
+              }));
+            } else {
+              if (window.toast) toast(yd.error || 'YOLO detect failed', 'err');
+            }
+          } catch (ye) {
+            console.warn('YOLO detect error:', ye);
+            if (window.toast) toast(ye.message || 'YOLO detect error', 'err');
+          }
         }
       }
 
@@ -2722,9 +2917,9 @@
     // Save annotations
     await ann2Save();
 
-    // Next image
+    // Next image safely
     if (_idx < _images.length - 1) {
-      _loadImg(_idx + 1);
+      await _navigateToImg(_idx + 1);
 
       // If auto loop is still active, trigger prediction automatically
       if (_autoAnnotateActive) {
@@ -2782,10 +2977,11 @@
     _tempAnnSelectedVertex = -1;
     _iouRejectedAnns = [];
     _hideSimplifypanel();
-    _redraw();
-    _updateShortcutHints();
     if (window.toast) toast('Scan cancelled');
   }
+
+  window.ann2ConfirmAutoAnns = _confirmTempAutoAnns;
+  window.ann2CancelAutoAnns = _clearTempAutoAnns;
 
   // ── Simplify Polygon (Ramer-Douglas-Peucker) ──
   function _rdpReduce(pts, eps) {
@@ -2807,6 +3003,51 @@
       return [...r1.slice(0, -1), ...r2];
     }
     return [pts[0], pts[end]];
+  }
+
+  function _simplifyPolygonToMaxPoints(pts, maxPts) {
+    if (!pts || pts.length <= maxPts || maxPts < 3) return pts;
+
+    let low = 0.0001;
+    let high = 0.5;
+    let best = pts;
+
+    for (let iter = 0; iter < 20; iter++) {
+      const mid = (low + high) / 2;
+      const closed = [...pts, pts[0]];
+      const reduced = _rdpReduce(closed, mid).slice(0, -1);
+
+      if (reduced.length <= maxPts && reduced.length >= 3) {
+        best = reduced;
+        high = mid;
+      } else if (reduced.length > maxPts) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+
+    while (best.length > maxPts && best.length > 3) {
+      let minArea = Infinity;
+      let removeIdx = -1;
+      const len = best.length;
+      for (let i = 0; i < len; i++) {
+        const p1 = best[(i - 1 + len) % len];
+        const p2 = best[i];
+        const p3 = best[(i + 1) % len];
+        const area = Math.abs((p1[0]*(p2[1]-p3[1]) + p2[0]*(p3[1]-p1[1]) + p3[0]*(p1[1]-p2[1])) / 2);
+        if (area < minArea) {
+          minArea = area;
+          removeIdx = i;
+        }
+      }
+      if (removeIdx >= 0) {
+        best.splice(removeIdx, 1);
+      } else {
+        break;
+      }
+    }
+    return best;
   }
 
   function _simplifyPolygon(pts, pct) {

@@ -22,7 +22,7 @@ def main():
         # Load image path
         image_path = load_first_image()
         
-        model_path = "sam3.1.pt"
+        model_path = os.path.join("model", "sam3.1.pt")
         if not os.path.exists(model_path):
             print(f"Error: {model_path} not found. Please wait for download_sam3.py to finish.")
             return

@@ -1,10 +1,12 @@
 import cv2
+import os
 from ultralytics import YOLO
 import numpy as np
 
 # Load model
-print("Loading model yolo26x-seg.pt...")
-model = YOLO("yolo26x-seg.pt")
+model_path = os.path.join("model", "yolo26x-seg.pt")
+print(f"Loading model {model_path}...")
+model = YOLO(model_path)
 
 # Load image
 img_path = "1366005_720_jpg.rf.a1b3030c4d6cbbd6e7a9a333e26d5653.jpg"

@@ -107,11 +107,12 @@ def main():
         if scale > 1.0:
             scale = 1.0
 
-        model_path = "sam2.1_l.pt"
+        model_path = os.path.join("model", "sam2.1_l.pt")
         if not os.path.exists(model_path):
             print(f"{model_path} not found locally. Downloading from GitHub release...")
             import urllib.request
             url = "https://github.com/ultralytics/assets/releases/download/v8.3.0/sam2.1_l.pt"
+            os.makedirs("model", exist_ok=True)
             urllib.request.urlretrieve(url, model_path)
             print("Download complete.")
 

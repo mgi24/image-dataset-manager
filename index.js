@@ -317,8 +317,11 @@ function switchPage(p, pushNav = true, subIndex = 0) {
   
   if (p === 'annotate2' && ds) {
     if (annData && annData.images) {
+      // Already have data in memory - use it instantly
       if (window.initAnn2) initAnn2({ name: ds.name, classes: annData.classes }, annData.images, subIndex);
     } else {
+      // Show loading state while fetching
+      showLoader(true, 'Memuat annotate data…');
       Promise.all([
         fetch(`/api/dataset/${enc(ds.name)}/annotate`).then(r => r.json()),
         fetch(`/api/dataset/${enc(ds.name)}/tags`).then(r => r.json())
@@ -332,9 +335,10 @@ function switchPage(p, pushNav = true, subIndex = 0) {
           });
           annData = data;
           annData.images = images;
+          showLoader(false);
           if (window.initAnn2) initAnn2({ name: ds.name, classes: data.classes }, images, subIndex);
         })
-        .catch(() => toast('Gagal memuat annotate2', 'err'));
+        .catch(() => { showLoader(false); toast('Gagal memuat annotate2', 'err'); });
     }
   }
 }

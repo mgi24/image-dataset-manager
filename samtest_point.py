@@ -108,9 +108,9 @@ def main():
         if scale > 1.0:
             scale = 1.0
 
-        model_path = "sam3.pt"
+        model_path = os.path.join("model", "sam3.pt")
         if not os.path.exists(model_path):
-            print(f"Error: {model_path} not found. Please make sure the sam3.pt file exists in the workspace directory.")
+            print(f"Error: {model_path} not found. Please make sure the sam3.pt file exists in the model directory.")
             return
 
         print(f"Loading {model_path} model...")

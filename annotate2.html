@@ -166,7 +166,7 @@
             </svg>
           </button>
           <button class="tog-btn ann2-tool-btn" id="ann2-tool-autoann" onclick="ann2SetTool('autoann')"
-            title="Auto Annotate - SAM text-prompt auto segmentation"
+            title="Auto Annotate (S) - SAM/YOLO auto segmentation&#10;S = Scan / Auto Annotate&#10;Enter = Approve / Konfirmasi&#10;Esc = Batal"
             style="width:36px; height:36px; padding:0; display:flex; justify-content:center; align-items:center; border-radius:6px; border:none; cursor:pointer; position:relative;">
             <svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor">
               <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4M12,6L14.12,10.5L19,11.13L15.5,14.5L16.24,19.37L12,17.12L7.76,19.37L8.5,14.5L5,11.13L9.88,10.5L12,6Z" />
@@ -180,6 +180,12 @@
           <div class="ann2-processing-spinner"></div>
           <div style="color:#e2e8f0; font-size:1.1rem; font-weight:600; letter-spacing:.03em;">Processing...</div>
           <div id="ann2-processing-detail" style="color:var(--text-muted); font-size:.8rem;"></div>
+        </div>
+
+        <!-- Image loading overlay (shown while image transitions) -->
+        <div id="ann2-img-loading-overlay" style="display:none; position:absolute; inset:0; background:rgba(7,9,14,0.7); z-index:50; justify-content:center; align-items:center; flex-direction:column; gap:12px; pointer-events:none; backdrop-filter:blur(2px);">
+          <div style="width:32px;height:32px;border-radius:50%;border:3px solid rgba(168,85,247,0.2);border-top-color:#a855f7;animation:spin 0.7s linear infinite;"></div>
+          <div style="color:var(--text-muted);font-size:.78rem;">Memuat gambar…</div>
         </div>
 
         <!-- Floating overlay for shortcuts and simplify panel -->
@@ -348,6 +354,9 @@
             <div class="ann2-yolo-model-opt" onclick="ann2AddYoloEntry('yolo26x-seg')" style="padding:6px 10px; font-size:.82rem; cursor:pointer; border-radius:5px; color:var(--text-primary); transition:background .1s;" onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background='transparent'">
               YOLO26x Segment
             </div>
+            <div class="ann2-yolo-model-opt" onclick="ann2AddYoloEntry('platLarge')" style="padding:6px 10px; font-size:.82rem; cursor:pointer; border-radius:5px; color:var(--text-primary); transition:background .1s;" onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background='transparent'">
+              platLarge (License Plate)
+            </div>
           </div>
         </div>
       </div>
@@ -484,6 +493,12 @@
     display: flex;
     flex-direction: column;
     gap: 7px;
+    transition: opacity .15s, border-color .15s, background-color .15s;
+  }
+  .ann2-yolo-entry.ann2-yolo-bypassed {
+    opacity: 0.5;
+    border-color: rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.02);
   }
   .ann2-yolo-entry-header {
     display: flex;
@@ -532,6 +547,18 @@
   .ann2-yolo-class-pair .ann2-pair-arrow {
     font-size: .75rem;
     color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .ann2-yolo-maxpts-input {
+    width: 62px;
+    padding: 4px 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: .76rem;
+    text-align: center;
     flex-shrink: 0;
   }
   .ann2-yolo-class-pair .ann2-pair-del {

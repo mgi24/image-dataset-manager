@@ -409,21 +409,28 @@
   </div>
 
   <script>
-    // Initialize Mermaid JS
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark',
-      securityLevel: 'loose',
-      flowchart: { curve: 'basis', useMaxWidth: true },
-      themeVariables: {
-        darkMode: true,
-        background: '#161b22',
-        primaryColor: '#bc8cff',
-        primaryTextColor: '#c9d1d9',
-        primaryBorderColor: '#30363d',
-        lineColor: '#58a6ff'
+    // Initialize Mermaid JS safely after script loads
+    function initMermaidSafe() {
+      if (window.mermaid) {
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'dark',
+          securityLevel: 'loose',
+          flowchart: { curve: 'basis', useMaxWidth: true },
+          themeVariables: {
+            darkMode: true,
+            background: '#161b22',
+            primaryColor: '#bc8cff',
+            primaryTextColor: '#c9d1d9',
+            primaryBorderColor: '#30363d',
+            lineColor: '#58a6ff'
+          }
+        });
+      } else {
+        setTimeout(initMermaidSafe, 50);
       }
-    });
+    }
+    initMermaidSafe();
 
     let _devlogs = [];
     let _activeFilename = '';

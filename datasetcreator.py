@@ -18,6 +18,7 @@ import uvicorn
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(BASE_DIR, 'dataset')
 DB_PATH = os.path.join(BASE_DIR, 'dataset_manager.db')
+MODEL_DIR = os.path.join(BASE_DIR, 'model')
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -251,6 +252,7 @@ class SaveAnnotationsRequest(BaseModel):
 class YoloClassPair(BaseModel):
     yolo_class_id: int
     ds_class_id: int
+    max_points: Optional[int] = None
 
 class YoloDetectRequest(BaseModel):
     filename: str
@@ -356,11 +358,53 @@ def serve_annotate_image(dataset_name: str, filename: str):
     raise HTTPException(status_code=404, detail="Image not found")
 
 # ─────────────────────────────────────────────
-# Dataset listing API
 # ─────────────────────────────────────────────
+# In-Memory RAM Caching for Datasets & Annotations
+# ─────────────────────────────────────────────
+_ram_cache_lock = threading.Lock()
+_datasets_list_cache = None
+_dataset_details_cache = {}
+_annotate_details_cache = {}
+_dataset_tags_cache = {}
+
+def invalidate_ram_cache(dataset_name: Optional[str] = None):
+    global _datasets_list_cache
+    with _ram_cache_lock:
+        _datasets_list_cache = None
+        if dataset_name:
+            _dataset_details_cache.pop(dataset_name, None)
+            _annotate_details_cache.pop(dataset_name, None)
+            _dataset_tags_cache.pop(dataset_name, None)
+        else:
+            _dataset_details_cache.clear()
+            _annotate_details_cache.clear()
+            _dataset_tags_cache.clear()
+
+def _preload_ram_cache():
+    try:
+        print("[RAM Cache] Preloading all datasets into server RAM...", flush=True)
+        ds_list = list_datasets()
+        for ds in ds_list:
+            ds_name = ds.get('name')
+            if ds_name:
+                get_dataset_details(ds_name)
+                get_annotate_details(ds_name)
+                get_dataset_tags(ds_name)
+        print("[RAM Cache] All datasets preloaded into server RAM successfully!", flush=True)
+    except Exception as e:
+        print(f"[RAM Cache] Preload error: {e}", flush=True)
+
+@app.on_event("startup")
+def startup_event():
+    threading.Thread(target=_preload_ram_cache, daemon=True).start()
 
 @app.get("/api/datasets")
 def list_datasets():
+    global _datasets_list_cache
+    with _ram_cache_lock:
+        if _datasets_list_cache is not None:
+            return _datasets_list_cache
+
     datasets = []
     if not os.path.exists(DATASET_DIR):
         return datasets
@@ -391,11 +435,18 @@ def list_datasets():
             })
     except Exception as e:
         print(f"Error listing datasets: {e}")
+
+    with _ram_cache_lock:
+        _datasets_list_cache = datasets
     return datasets
 
 
 @app.get("/api/dataset/{dataset_name}")
 def get_dataset_details(dataset_name: str):
+    with _ram_cache_lock:
+        if dataset_name in _dataset_details_cache:
+            return _dataset_details_cache[dataset_name]
+
     dataset_path = safe_dataset_path(dataset_name)
     images_dir = os.path.join(dataset_path, 'images')
     labels_dir = os.path.join(dataset_path, 'labels')
@@ -411,12 +462,19 @@ def get_dataset_details(dataset_name: str):
                     images_list.append({"filename": f, "annotations": parse_label_file(lp)})
         except Exception as e:
             print(f"Error loading images: {e}")
-    return {"classes": yaml_data, "images": images_list}
+    res = {"classes": yaml_data, "images": images_list}
+    with _ram_cache_lock:
+        _dataset_details_cache[dataset_name] = res
+    return res
 
 
 @app.get("/api/dataset/{dataset_name}/annotate")
 def get_annotate_details(dataset_name: str):
     """Return images in the annotate staging folder."""
+    with _ram_cache_lock:
+        if dataset_name in _annotate_details_cache:
+            return _annotate_details_cache[dataset_name]
+
     dataset_path = safe_dataset_path(dataset_name)
     ann_images_dir = os.path.join(dataset_path, 'annotate', 'images')
     ann_labels_dir = os.path.join(dataset_path, 'annotate', 'labels')
@@ -432,12 +490,25 @@ def get_annotate_details(dataset_name: str):
                     images_list.append({"filename": f, "annotations": parse_label_file(lp)})
         except Exception as e:
             print(f"Error loading annotate images: {e}")
-    return {"classes": yaml_data, "images": images_list}
+    res = {"classes": yaml_data, "images": images_list}
+    with _ram_cache_lock:
+        _annotate_details_cache[dataset_name] = res
+    return res
 
 
 class SaveLabelRequest(BaseModel):
     filename: str
     label: str
+
+def update_annotate_cache_image(dataset_name: str, filename: str, annotations: list):
+    with _ram_cache_lock:
+        cache_obj = _annotate_details_cache.get(dataset_name)
+        if cache_obj and "images" in cache_obj:
+            for img in cache_obj["images"]:
+                if img.get("filename") == filename:
+                    img["annotations"] = annotations
+                    return
+        _annotate_details_cache.pop(dataset_name, None)
 
 @app.post("/api/dataset/{dataset_name}/annotate/save-label")
 def save_annotate_label(dataset_name: str, payload: SaveLabelRequest):
@@ -454,6 +525,8 @@ def save_annotate_label(dataset_name: str, payload: SaveLabelRequest):
     try:
         with open(label_path, 'w', encoding='utf-8') as f:
             f.write(payload.label)
+        parsed_anns = parse_label_file(label_path)
+        update_annotate_cache_image(dataset_name, safe_fn, parsed_anns)
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -551,6 +624,7 @@ def rename_image(dataset_name: str, payload: RenameImageRequest):
         cursor.execute("UPDATE image_tags SET image_filename = ? WHERE dataset_name = ? AND image_filename = ?;", (new_fn, dataset_name, old_fn))
         conn.commit()
         conn.close()
+        invalidate_ram_cache(dataset_name)
         
         return {"success": True, "new_filename": new_fn}
     except HTTPException:
@@ -587,6 +661,7 @@ def move_to_annotate(dataset_name: str, payload: AnnotateMoveRequest):
             moved.append(safe_fn)
         except Exception as e:
             errors.append({"file": safe_fn, "error": str(e)})
+    invalidate_ram_cache(dataset_name)
     return {"moved": moved, "errors": errors}
 
 
@@ -615,6 +690,7 @@ def move_back_to_dataset(dataset_name: str, payload: AnnotateMoveRequest):
             moved.append(safe_fn)
         except Exception as e:
             errors.append({"file": safe_fn, "error": str(e)})
+    invalidate_ram_cache(dataset_name)
     return {"moved": moved, "errors": errors}
 
 
@@ -756,10 +832,15 @@ def delete_tag(tag_name: str):
     cursor.execute("DELETE FROM tags WHERE name = ?;", (tag_name,))
     conn.commit()
     conn.close()
+    invalidate_ram_cache()
     return {"success": True}
 
 @app.get("/api/dataset/{dataset_name}/tags")
 def get_dataset_tags(dataset_name: str):
+    with _ram_cache_lock:
+        if dataset_name in _dataset_tags_cache:
+            return _dataset_tags_cache[dataset_name]
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT image_filename, tag_name FROM image_tags WHERE dataset_name = ?;", (dataset_name,))
@@ -771,6 +852,9 @@ def get_dataset_tags(dataset_name: str):
         if img_fn not in mapping:
             mapping[img_fn] = []
         mapping[img_fn].append(tag)
+
+    with _ram_cache_lock:
+        _dataset_tags_cache[dataset_name] = mapping
     return mapping
 
 @app.post("/api/dataset/{dataset_name}/image-tags")
@@ -783,6 +867,7 @@ def update_image_tags(dataset_name: str, payload: ImageTagsUpdate):
             for tag in payload.tags:
                 cursor.execute("INSERT OR IGNORE INTO image_tags (dataset_name, image_filename, tag_name) VALUES (?, ?, ?);", (dataset_name, fn, tag))
         conn.commit()
+        invalidate_ram_cache(dataset_name)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1083,13 +1168,17 @@ def _get_sam_model(model_name='sam3'):
         with _sam_model_lock:
             if model_name not in _sam_models:
                 model_file = f"{model_name}.pt"
-                model_path = os.path.join(BASE_DIR, model_file)
+                model_path = os.path.join(MODEL_DIR, model_file)
                 if not os.path.exists(model_path):
-                    if model_name == 'sam2.1_l':
+                    base_path = os.path.join(BASE_DIR, model_file)
+                    if os.path.exists(base_path):
+                        model_path = base_path
+                    elif model_name == 'sam2.1_l':
                         url = "https://github.com/ultralytics/assets/releases/download/v8.3.0/sam2.1_l.pt"
+                        os.makedirs(MODEL_DIR, exist_ok=True)
                         _download_model_file(url, model_path)
                     else:
-                        raise HTTPException(status_code=503, detail=f"{model_file} not found")
+                        raise HTTPException(status_code=503, detail=f"{model_file} not found in model folder")
                 from ultralytics import SAM
                 _sam_models[model_name] = SAM(model_path)
     return _sam_models[model_name]
@@ -1295,9 +1384,13 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
 
         model_name = payload.model if payload.model in ('sam3', 'sam3.1') else 'sam3.1'
         model_file = f"{model_name}.pt"
-        model_path = os.path.join(BASE_DIR, model_file)
+        model_path = os.path.join(MODEL_DIR, model_file)
         if not os.path.exists(model_path):
-            raise HTTPException(status_code=503, detail=f"{model_file} not found")
+            base_path = os.path.join(BASE_DIR, model_file)
+            if os.path.exists(base_path):
+                model_path = base_path
+            else:
+                raise HTTPException(status_code=503, detail=f"{model_file} not found in model folder")
 
         # Read image for dimensions
         img = cv2.imread(image_path)
@@ -1465,12 +1558,18 @@ def sam_auto_annotate(dataset_name: str, payload: SamAutoAnnotateRequest):
 def get_yolo_model_names(model: str):
     if model == 'yolov26x':
         model = 'yolo26x-seg'
-    model_file = f"{model}.pt"
-    model_path = os.path.join(BASE_DIR, model_file)
+    if model.endswith('.pt'):
+        model_file = model
+        clean_model = model[:-3]
+    else:
+        model_file = f"{model}.pt"
+        clean_model = model
+    model_path = os.path.join(MODEL_DIR, model_file)
     if not os.path.exists(model_path):
-        model_path = model_file
+        base_path = os.path.join(BASE_DIR, model_file)
+        model_path = base_path if os.path.exists(base_path) else model_file
     try:
-        yolo = _get_yolo_model(model, model_path, device='cpu')
+        yolo = _get_yolo_model(clean_model, model_path, device='cpu')
         names = [yolo.names[i] for i in sorted(yolo.names.keys())]
         return {"success": True, "names": names}
     except Exception as e:
@@ -1478,9 +1577,10 @@ def get_yolo_model_names(model: str):
         try:
             fallback_model = 'yolo11n-seg' if "-seg" in model else 'yolo11n'
             fallback_file = f"{fallback_model}.pt"
-            fallback_path = os.path.join(BASE_DIR, fallback_file)
+            fallback_path = os.path.join(MODEL_DIR, fallback_file)
             if not os.path.exists(fallback_path):
-                fallback_path = fallback_file
+                base_fallback = os.path.join(BASE_DIR, fallback_file)
+                fallback_path = base_fallback if os.path.exists(base_fallback) else fallback_file
             yolo = _get_yolo_model(fallback_model, fallback_path, device='cpu')
             names = [yolo.names[i] for i in sorted(yolo.names.keys())]
             return {"success": True, "names": names}
@@ -1503,23 +1603,30 @@ def yolo_detect(dataset_name: str, payload: YoloDetectRequest):
         model_name = payload.model if payload.model else 'yolo26x-seg'
         if model_name == 'yolov26x':
             model_name = 'yolo26x-seg'
-        model_file = f"{model_name}.pt"
-        model_path = os.path.join(BASE_DIR, model_file)
+        if model_name.endswith('.pt'):
+            model_file = model_name
+            clean_model = model_name[:-3]
+        else:
+            model_file = f"{model_name}.pt"
+            clean_model = model_name
+        model_path = os.path.join(MODEL_DIR, model_file)
         if not os.path.exists(model_path):
-            model_path = model_file
+            base_path = os.path.join(BASE_DIR, model_file)
+            model_path = base_path if os.path.exists(base_path) else model_file
 
         device = payload.device if payload.device else 'cuda:0'
         
         try:
-            yolo = _get_yolo_model(model_name, model_path, device)
+            yolo = _get_yolo_model(clean_model, model_path, device)
             results = yolo(image_path, conf=payload.conf, device=device)
         except Exception as first_err:
             print(f"Failed to load requested model {model_name}, trying fallback: {first_err}")
             fallback_model = 'yolo11n-seg' if "-seg" in model_name else 'yolo11n'
             fallback_file = f"{fallback_model}.pt"
-            fallback_path = os.path.join(BASE_DIR, fallback_file)
+            fallback_path = os.path.join(MODEL_DIR, fallback_file)
             if not os.path.exists(fallback_path):
-                fallback_path = fallback_file
+                base_fallback = os.path.join(BASE_DIR, fallback_file)
+                fallback_path = base_fallback if os.path.exists(base_fallback) else fallback_file
             yolo = _get_yolo_model(fallback_model, fallback_path, device)
             results = yolo(image_path, conf=payload.conf, device=device)
 
@@ -1734,6 +1841,7 @@ def save_annotations(dataset_name: str, payload: SaveAnnotationsRequest):
         else:
             if os.path.exists(label_path):
                 os.remove(label_path)
+        invalidate_ram_cache(dataset_name)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal menulis file label: {e}")
         
