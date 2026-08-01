@@ -515,6 +515,7 @@
       previewImg.className = 'preview-img';
       previewImg.id = `preview-img-${node.id}`;
       previewImg.style.display = 'none';
+      previewImg.draggable = false;
       if (node.properties.last_preview) {
         previewImg.src = `data:image/jpeg;base64,${node.properties.last_preview}`;
         previewImg.style.display = 'block';
@@ -573,6 +574,7 @@
       previewImg.className = 'preview-img';
       previewImg.id = `preview-img-${node.id}`;
       previewImg.style.display = 'none';
+      previewImg.draggable = false;
       if (node.properties.last_preview) {
         previewImg.src = `data:image/jpeg;base64,${node.properties.last_preview}`;
         previewImg.style.display = 'block';
