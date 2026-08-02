@@ -299,6 +299,46 @@
   }
 
   // --- Rendering Nodes DOM ---
+  function renderPreviewContent(nodeId, previewData) {
+    const previewContainer = document.getElementById(`preview-container-${nodeId}`);
+    if (!previewContainer) return;
+
+    previewContainer.innerHTML = '';
+
+    if (!previewData || (Array.isArray(previewData) && previewData.length === 0)) {
+      const previewPlaceholder = document.createElement('span');
+      previewPlaceholder.className = 'preview-placeholder';
+      previewPlaceholder.textContent = 'No Ground Truth/Predicted Preview';
+      previewContainer.appendChild(previewPlaceholder);
+      return;
+    }
+
+    const items = Array.isArray(previewData) ? previewData : [previewData];
+
+    items.forEach((b64, idx) => {
+      const itemWrapper = document.createElement('div');
+      itemWrapper.style.cssText = 'width: 100%; margin-bottom: 6px; display: flex; flex-direction: column; gap: 2px;';
+
+      const label = document.createElement('span');
+      label.style.cssText = 'font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;';
+      if (items.length > 1) {
+        label.textContent = idx === 0 ? '1. Overall Detection Segment' : `2. Detection #${idx} (BBox Crop | Segment Crop)`;
+      } else {
+        label.textContent = 'Preview Output';
+      }
+      itemWrapper.appendChild(label);
+
+      const img = document.createElement('img');
+      img.className = 'preview-img';
+      img.style.cssText = 'width: 100%; height: auto; max-height: none; display: block; border-radius: 4px; border: 1px solid var(--border);';
+      img.src = `data:image/jpeg;base64,${b64}`;
+      img.draggable = false;
+
+      itemWrapper.appendChild(img);
+      previewContainer.appendChild(itemWrapper);
+    });
+  }
+
   function renderNodeDOM(node) {
     const el = document.createElement('div');
     el.id = node.id;
@@ -733,7 +773,7 @@
       const previewContainer = document.createElement('div');
       previewContainer.className = 'preview-container resizable-box';
       previewContainer.id = `preview-container-${node.id}`;
-      previewContainer.style.overflowY = 'auto';
+      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px;';
       if (node.properties.preview_width) {
         previewContainer.style.width = node.properties.preview_width + 'px';
         previewContainer.style.height = node.properties.preview_height + 'px';
@@ -744,26 +784,8 @@
         saveCanvas();
       };
       
-      const previewPlaceholder = document.createElement('span');
-      previewPlaceholder.className = 'preview-placeholder';
-      previewPlaceholder.textContent = 'No Ground Truth/Predicted Preview';
-      
-      const previewImg = document.createElement('img');
-      previewImg.className = 'preview-img';
-      previewImg.id = `preview-img-${node.id}`;
-      previewImg.style.display = 'none';
-      previewImg.style.width = '100%';
-      previewImg.style.height = 'auto';
-      previewImg.style.maxHeight = 'none';
-      previewImg.draggable = false;
-      if (node.properties.last_preview) {
-        previewImg.src = `data:image/jpeg;base64,${node.properties.last_preview}`;
-        previewImg.style.display = 'block';
-        previewPlaceholder.style.display = 'none';
-      }
-      
-      previewContainer.append(previewPlaceholder, previewImg);
       body.appendChild(previewContainer);
+      setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
     }
 
     el.append(header, body);
@@ -1310,16 +1332,21 @@
           Object.keys(d.previews).forEach(nodeId => {
             const node = _nodes.find(n => n.id === nodeId);
             if (node) {
-              const base64 = d.previews[nodeId];
-              node.properties.last_preview = base64;
+              const previewData = d.previews[nodeId];
+              node.properties.last_preview = previewData;
 
-              const previewImg = document.getElementById(`preview-img-${nodeId}`);
-              const previewPlaceholder = document.querySelector(`#preview-container-${nodeId} .preview-placeholder`);
-              
-              if (previewImg && base64) {
-                previewImg.src = `data:image/jpeg;base64,${base64}`;
-                previewImg.style.display = 'block';
-                if (previewPlaceholder) previewPlaceholder.style.display = 'none';
+              if (node.type === 'preview') {
+                renderPreviewContent(nodeId, previewData);
+              } else {
+                const previewImg = document.getElementById(`preview-img-${nodeId}`);
+                const previewPlaceholder = document.querySelector(`#preview-container-${nodeId} .preview-placeholder`);
+                const base64 = Array.isArray(previewData) ? previewData[0] : previewData;
+                
+                if (previewImg && base64) {
+                  previewImg.src = `data:image/jpeg;base64,${base64}`;
+                  previewImg.style.display = 'block';
+                  if (previewPlaceholder) previewPlaceholder.style.display = 'none';
+                }
               }
             }
           });

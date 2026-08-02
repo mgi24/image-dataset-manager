@@ -748,7 +748,7 @@ def run_flow(payload: RunFlowRequest):
 
             # We will draw all annotations on annotated_img for the top "whole image" view
             annotated_img = img.copy()
-            detection_rows = []
+            detection_crops_b64 = []
 
             for anno in src_annotations:
                 class_id = anno["class_id"]
@@ -872,32 +872,28 @@ def run_flow(payload: RunFlowRequest):
                 left_resized = cv2.resize(left_crop, (W_half, h_row))
                 right_resized = cv2.resize(right_crop, (W_half, h_row))
 
-                # Horizontal concatenation
+                # Horizontal concatenation (bbox crop + segment fill crop)
                 row_img = np.hstack([left_resized, right_resized])
                 # Draw vertical divider line
                 cv2.line(row_img, (W_half, 0), (W_half, h_row), (80, 80, 80), 2)
-                detection_rows.append(row_img)
 
-            # Build final composite image
+                # Encode this detection pair image to base64
+                _, crop_buf = cv2.imencode(".jpg", row_img)
+                crop_b64 = base64.b64encode(crop_buf).decode("utf-8")
+                detection_crops_b64.append(crop_b64)
+
+            # Build overall detection image
             W = 640
             h_top = int(h * (W / w))
             if h_top <= 0:
                 h_top = 1
             top_img = cv2.resize(annotated_img, (W, h_top))
 
-            all_rows = [top_img]
-            for row_img in detection_rows:
-                # Add horizontal divider (black spacer)
-                divider = np.zeros((4, W, 3), dtype=np.uint8)
-                all_rows.append(divider)
-                all_rows.append(row_img)
+            _, top_buf = cv2.imencode(".jpg", top_img)
+            overall_b64 = base64.b64encode(top_buf).decode("utf-8")
 
-            composite_img = np.vstack(all_rows)
-
-            # Encode preview
-            _, buffer = cv2.imencode(".jpg", composite_img)
-            preview_b64 = base64.b64encode(buffer).decode("utf-8")
-            previews[p_node_id] = preview_b64
+            # Store overall image + list of detection pair images
+            previews[p_node_id] = [overall_b64] + detection_crops_b64
 
     # If no Preview nodes found, evaluate the YOLO or SAM3 node directly so we get its outputs
     if not preview_nodes_found:
