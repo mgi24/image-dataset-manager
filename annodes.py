@@ -746,6 +746,10 @@ def run_flow(payload: RunFlowRequest):
             
             h, w = img.shape[:2]
 
+            # We will draw all annotations on annotated_img for the top "whole image" view
+            annotated_img = img.copy()
+            detection_rows = []
+
             for anno in src_annotations:
                 class_id = anno["class_id"]
                 coords = anno["coords"]
@@ -766,10 +770,10 @@ def run_flow(payload: RunFlowRequest):
                 if is_segment:
                     pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
                     if len(pts_px) >= 3:
-                        overlay = img.copy()
+                        overlay = annotated_img.copy()
                         cv2.fillPoly(overlay, [pts_px], bgr)
-                        cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
-                        cv2.polylines(img, [pts_px], True, bgr, 2)
+                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
+                        cv2.polylines(annotated_img, [pts_px], True, bgr, 2)
                         
                         min_y_idx = np.argmin(pts_px[:, 1])
                         lbl_x = int(pts_px[min_y_idx][0])
@@ -783,10 +787,10 @@ def run_flow(payload: RunFlowRequest):
                         x2 = int((xc + bw/2) * w)
                         y2 = int((yc + bh/2) * h)
                         
-                        overlay = img.copy()
+                        overlay = annotated_img.copy()
                         cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
-                        cv2.addWeighted(overlay, 0.3, img, 0.7, 0, img)
-                        cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
+                        cv2.rectangle(annotated_img, (x1, y1), (x2, y2), bgr, 2)
                         lbl_x, lbl_y = x1, y1
 
                 # Draw Text Label if class_source is connected
@@ -795,11 +799,103 @@ def run_flow(payload: RunFlowRequest):
                     if conf is not None:
                         lbl_txt += f" {conf:.2f}"
                     (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                    cv2.rectangle(img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
-                    cv2.putText(img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.rectangle(annotated_img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                    cv2.putText(annotated_img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+                # Now calculate the crop bounding box for this individual detection
+                if is_segment:
+                    xs = coords[0::2]
+                    ys = coords[1::2]
+                    if len(xs) > 0 and len(ys) > 0:
+                        xmin, xmax = min(xs), max(xs)
+                        ymin, ymax = min(ys), max(ys)
+                        cx1 = int(xmin * w)
+                        cy1 = int(ymin * h)
+                        cx2 = int(xmax * w)
+                        cy2 = int(ymax * h)
+                    else:
+                        continue
+                else:
+                    if len(coords) >= 4:
+                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                        cx1 = int((xc - bw/2) * w)
+                        cy1 = int((yc - bh/2) * h)
+                        cx2 = int((xc + bw/2) * w)
+                        cy2 = int((yc + bh/2) * h)
+                    else:
+                        continue
+
+                cx1 = max(0, min(cx1, w - 1))
+                cx2 = max(0, min(cx2, w - 1))
+                cy1 = max(0, min(cy1, h - 1))
+                cy2 = max(0, min(cy2, h - 1))
+
+                crop_w = cx2 - cx1
+                crop_h = cy2 - cy1
+                if crop_w <= 0 or crop_h <= 0:
+                    continue
+
+                # Crop raw image and draw its own annotation outline/overlay
+                left_crop = img[cy1:cy2, cx1:cx2].copy()
+                if is_segment:
+                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                    pts_offset = pts_px - [cx1, cy1]
+                    if len(pts_offset) >= 3:
+                        overlay_crop = left_crop.copy()
+                        cv2.fillPoly(overlay_crop, [pts_offset], bgr)
+                        cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                        cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
+                else:
+                    overlay_crop = left_crop.copy()
+                    cv2.rectangle(overlay_crop, (0, 0), (crop_w, crop_h), bgr, -1)
+                    cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                    cv2.rectangle(left_crop, (0, 0), (crop_w, crop_h), bgr, 2)
+
+                # Create mask to get ONLY the fill of the segment/box
+                mask = np.zeros((h, w), dtype=np.uint8)
+                if is_segment:
+                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                    if len(pts_px) >= 3:
+                        cv2.fillPoly(mask, [pts_px], 255)
+                else:
+                    cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
+
+                masked_img = cv2.bitwise_and(img, img, mask=mask)
+                right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
+
+                # Resize to standard width W_half (320)
+                W_half = 320
+                h_row = int(crop_h * (W_half / crop_w))
+                if h_row <= 0:
+                    h_row = 1
+
+                left_resized = cv2.resize(left_crop, (W_half, h_row))
+                right_resized = cv2.resize(right_crop, (W_half, h_row))
+
+                # Horizontal concatenation
+                row_img = np.hstack([left_resized, right_resized])
+                # Draw vertical divider line
+                cv2.line(row_img, (W_half, 0), (W_half, h_row), (80, 80, 80), 2)
+                detection_rows.append(row_img)
+
+            # Build final composite image
+            W = 640
+            h_top = int(h * (W / w))
+            if h_top <= 0:
+                h_top = 1
+            top_img = cv2.resize(annotated_img, (W, h_top))
+
+            all_rows = [top_img]
+            for row_img in detection_rows:
+                # Add horizontal divider (black spacer)
+                divider = np.zeros((4, W, 3), dtype=np.uint8)
+                all_rows.append(divider)
+                all_rows.append(row_img)
+
+            composite_img = np.vstack(all_rows)
 
             # Encode preview
-            _, buffer = cv2.imencode(".jpg", img)
+            _, buffer = cv2.imencode(".jpg", composite_img)
             preview_b64 = base64.b64encode(buffer).decode("utf-8")
             previews[p_node_id] = preview_b64
 
