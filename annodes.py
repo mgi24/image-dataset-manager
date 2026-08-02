@@ -16,6 +16,7 @@ import numpy as np
 import threading
 import queue
 import concurrent.futures
+import requests
 
 # Parse command line args
 parser = argparse.ArgumentParser(description="Annodes Server")
@@ -129,6 +130,21 @@ def init_db():
             current_index INTEGER DEFAULT 0
         );
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ai_decision_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    """)
+    # Seed AI configs
+    cursor.execute("SELECT COUNT(*) FROM ai_decision_config WHERE key = 'endpoints'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO ai_decision_config (key, value) VALUES ('endpoints', '[]')")
+        
+    cursor.execute("SELECT COUNT(*) FROM ai_decision_config WHERE key = 'models'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO ai_decision_config (key, value) VALUES ('models', '[\"gpt-4o\", \"gpt-4-turbo\", \"claude-3-5-sonnet\", \"llama3\"]')")
+
     # Seed flow state
     cursor.execute("SELECT COUNT(*) FROM flow_state")
     if cursor.fetchone()[0] == 0:
@@ -171,23 +187,27 @@ def read_root():
     return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
 @app.get("/{flow_id}")
-def read_flow_tab(flow_id: int):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM canvas_tabs WHERE id = ?", (flow_id,))
-        if cursor.fetchone():
-            cursor.execute("UPDATE canvas_tabs SET is_active = 0")
-            cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (flow_id,))
-            conn.commit()
-        conn.close()
-    except Exception as e:
-        pass
-    return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
+def read_flow_tab(flow_id: str):
+    if flow_id.isdigit():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM canvas_tabs WHERE id = ?", (int(flow_id),))
+            if cursor.fetchone():
+                cursor.execute("UPDATE canvas_tabs SET is_active = 0")
+                cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (int(flow_id),))
+                conn.commit()
+            conn.close()
+        except Exception as e:
+            pass
+        return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
-@app.get("/annodes.js")
-def read_js():
-    return FileResponse(os.path.join(BASE_DIR, "annodes.js"))
+    # Serve static files from BASE_DIR if they exist
+    file_path = os.path.join(BASE_DIR, flow_id)
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        return FileResponse(file_path)
+
+    raise HTTPException(status_code=404, detail="Not Found")
 
 @app.get("/api/models")
 def get_models():
@@ -374,6 +394,91 @@ async def upload_image(file: UploadFile = File(...)):
         return {"success": True, "path": f"uploads/{file.filename}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class AIConfigSaveRequest(BaseModel):
+    endpoints: List[Dict[str, Any]]
+    models: List[str]
+
+@app.get("/api/ai-decision/config")
+def get_ai_decision_config():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM ai_decision_config WHERE key = 'endpoints'")
+        endpoints_row = cursor.fetchone()
+        cursor.execute("SELECT value FROM ai_decision_config WHERE key = 'models'")
+        models_row = cursor.fetchone()
+        conn.close()
+        
+        endpoints = json.loads(endpoints_row[0]) if endpoints_row else []
+        models = json.loads(models_row[0]) if models_row else ["gpt-4o", "gpt-4-turbo", "claude-3-5-sonnet", "llama3"]
+        return {"endpoints": endpoints, "models": models}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/ai-decision/config")
+def save_ai_decision_config(payload: AIConfigSaveRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO ai_decision_config (key, value) VALUES ('endpoints', ?)", (json.dumps(payload.endpoints),))
+        cursor.execute("INSERT OR REPLACE INTO ai_decision_config (key, value) VALUES ('models', ?)", (json.dumps(payload.models),))
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AICheckEndpointRequest(BaseModel):
+    url: str
+    api_key: Optional[str] = None
+
+@app.post("/api/ai-decision/check-endpoint")
+def check_endpoint(payload: AICheckEndpointRequest):
+    url = payload.url.strip()
+    api_key = payload.api_key.strip() if payload.api_key else ""
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="Endpoint URL is required")
+        
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+        
+    try:
+        test_url = url
+        if not test_url.endswith("/models") and not test_url.endswith("/v1/models") and not test_url.endswith("/api/tags"):
+            if "ollama" in test_url or "11434" in test_url:
+                test_url = test_url.rstrip("/") + "/api/tags"
+            else:
+                test_url = test_url.rstrip("/") + "/v1/models"
+                
+        response = requests.get(test_url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=f"Endpoint returned status code {response.status_code}: {response.text}")
+            
+        data = response.json()
+        models = []
+        if "data" in data and isinstance(data["data"], list):
+            for item in data["data"]:
+                if isinstance(item, dict):
+                    models.append(item.get("id") or item.get("name"))
+        elif "models" in data and isinstance(data["models"], list):
+            for item in data["models"]:
+                if isinstance(item, dict):
+                    models.append(item.get("name") or item.get("id"))
+        else:
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, str):
+                        models.append(item)
+                    elif isinstance(item, dict):
+                        models.append(item.get("id") or item.get("name"))
+                        
+        models = [m for m in models if m]
+        return {"success": True, "models": sorted(list(set(models)))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to endpoint: {str(e)}")
 
 @app.get("/api/tabs")
 def get_tabs():
@@ -1197,6 +1302,43 @@ def run_flow(payload: RunFlowRequest):
 
             return eval_cache[cache_key]
 
+        # 5. AI Decision Node
+        elif node["type"] == "ai_decision":
+            event_queue.put({"type": "start", "node_id": node_id})
+            
+            # Passthrough image if available
+            img_source = connections_to.get((node_id, "image"))
+            preview_b64 = ""
+            src_image_path = None
+            if img_source:
+                try:
+                    src_image_path = evaluate(img_source[0], img_source[1])
+                    img = cv2.imread(src_image_path)
+                    if img is not None:
+                        # Draw warning text on the image
+                        cv2.putText(img, "AI DECISION (BELUM READY)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+                        _, buffer = cv2.imencode(".jpg", img)
+                        preview_b64 = base64.b64encode(buffer).decode("utf-8")
+                except Exception:
+                    pass
+            
+            log_html = '<div style="color:#ef4444; font-weight:bold;">[BELUM READY] AI Decision Node evaluation logic is currently not implemented. Endpoints and models management is fully functional.</div>'
+            
+            with cache_lock:
+                previews[node_id] = preview_b64
+                logs[node_id] = log_html
+                if src_image_path:
+                    eval_cache[(node_id, "image")] = src_image_path
+                
+            event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": preview_b64,
+                "logs": log_html
+            })
+            raise HTTPException(status_code=400, detail="AI Decision Node: [BELUM READY] Evaluasi logika belum diimplementasikan.")
+
         raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
 
     def run_all():
@@ -1691,7 +1833,7 @@ def run_flow(payload: RunFlowRequest):
                     executor.map(process_preview, preview_nodes)
             else:
                 # Spawning evaluations for YOLO or SAM3 or pointer directly
-                direct_nodes = [n for n in payload.nodes if n["type"] in ("yolo_detector", "sam3", "pointer")]
+                direct_nodes = [n for n in payload.nodes if n["type"] in ("yolo_detector", "sam3", "pointer", "ai_decision")]
                 if direct_nodes:
                     def process_direct(n):
                         try:

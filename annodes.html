@@ -516,7 +516,7 @@
     }
     
     /* Resizable Nodes and Preview Boxes */
-    .node.yolo_detector, .node.sam3, .node.preview, .node.overlap_comparator, .node.pointer {
+    .node.yolo_detector, .node.sam3, .node.preview, .node.overlap_comparator, .node.pointer, .node.ai_decision {
       width: fit-content !important;
       min-width: 320px;
     }
@@ -836,6 +836,103 @@
       from { transform: translateY(20px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+    
+    /* AI Decision Node & Modal Styles */
+    .ai-decision-settings-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s;
+    }
+    .ai-decision-settings-btn:hover {
+      color: var(--accent);
+    }
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(10, 15, 26, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-box {
+      background: rgba(22, 28, 45, 0.98);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 520px;
+      max-width: 90vw;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+      overflow: hidden;
+      color: var(--text-primary);
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      cursor: pointer;
+    }
+    .modal-close:hover {
+      color: var(--text-primary);
+    }
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .modal-section-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .endpoint-item, .model-item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(10, 15, 26, 0.4);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+    }
+    .model-delete-btn {
+      color: #ef4444;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .model-delete-btn:hover {
+      color: #f87171;
+    }
   </style>
 </head>
 <body>
@@ -904,6 +1001,12 @@
               <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6Z"/>
             </svg>
             Overlap Comparator
+          </div>
+          <div class="node-template-btn" data-type="ai_decision">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M12,2C6.5,2 2,6.5 2,12C2,17.5 6.5,22 12,22C17.5,22 22,17.5 22,12C22,6.5 17.5,2 12,2M12,20C7.6,20 4,16.4 4,12C4,7.6 7.6,4 12,4C16.4,4 20,7.6 20,12C20,16.4 16.4,20 12,20M13,7H11V9H13V7M13,11H11V17H13V11Z"/>
+            </svg>
+            AI Decision
           </div>
         </div>
       </div>

@@ -11,6 +11,8 @@
   // Available models & GPUs cached
   let _cachedModels = [];
   let _cachedGpus = [];
+  let _aiModels = [];
+  let _aiEndpoints = [];
 
   // DOM elements
   const canvasWrap = document.getElementById('canvas-wrap');
@@ -116,7 +118,7 @@
     });
   }
 
-  async function selectTab(tabId) {
+  async function selectTab(tabId, skipPushState = false) {
     try {
       const r = await fetch('/api/tabs/select', {
         method: 'POST',
@@ -126,6 +128,10 @@
       if (r.ok) {
         const data = await r.json();
         _activeTabId = data.tab_id;
+        
+        if (!skipPushState) {
+          window.history.pushState(null, '', '/' + data.tab_id);
+        }
         
         nodesContainer.innerHTML = '';
         _nodes = data.nodes || [];
@@ -254,6 +260,7 @@
     // Load available models and GPUs from server
     await fetchModels();
     await fetchGpus();
+    await fetchAiConfig();
 
     // Load saved canvas layout
     await loadCanvas();
@@ -346,6 +353,14 @@
 
     // Initial render
     renderAll();
+
+    // Bind window popstate to support browser Back/Forward tab switching
+    window.addEventListener('popstate', async () => {
+      const path = window.location.pathname.substring(1);
+      if (/^\d+$/.test(path)) {
+        await selectTab(parseInt(path), true);
+      }
+    });
   }
 
   // --- API Fetchers ---
@@ -367,6 +382,29 @@
     // Ensure CPU is always an option in the list
     if (!_cachedGpus.some(g => g.id === 'cpu')) {
       _cachedGpus.push({ id: 'cpu', name: 'CPU' });
+    }
+  }
+
+  async function fetchAiConfig() {
+    try {
+      const r = await fetch('/api/ai-decision/config');
+      const d = await r.json();
+      _aiModels = d.models || [];
+      _aiEndpoints = d.endpoints || [];
+    } catch (e) {
+      console.warn('Failed to fetch AI Decision config', e);
+    }
+  }
+
+  async function saveAiConfig() {
+    try {
+      await fetch('/api/ai-decision/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoints: _aiEndpoints, models: _aiModels })
+      });
+    } catch (e) {
+      console.error('Failed to save AI Decision config', e);
     }
   }
 
@@ -437,6 +475,19 @@
           preview_width: 320,
           preview_height: 240
         };
+      } else if (type === 'ai_decision') {
+        properties = {
+          input_pins: ['image', 'class', 'annotation1', 'annotation2'],
+          model: '',
+          class_rules: {
+            'semua mobil kecil, minibus, termasuk mobil bak terbuka, kecualikan mobil dengan box bak tertutup.': '0'
+          },
+          global_rules: 'anda adalah manager dataset yang bertugas decide hasil dari deteksi sudah benar atau belum, compare mana yang bagus maskingnya, output json.',
+          last_preview: null,
+          last_logs: null,
+          preview_width: 320,
+          preview_height: 240
+        };
       } else if (type === 'pointer') {
         properties = {
           points: [],
@@ -459,8 +510,10 @@
       refreshYoloBindings(id);
     } else if (type === 'sam3') {
       refreshSam3Bindings(id);
+    } else if (type === 'ai_decision') {
+      refreshAiDecisionRules(id);
     } else {
-      // Refresh connected YOLO/SAM3 nodes
+      // Refresh connected YOLO/SAM3/AI Decision nodes
       refreshAllYoloBindings();
     }
   }
@@ -521,7 +574,7 @@
 
       row.append(pinEl, label);
 
-      if (node.type === 'overlap_comparator' && pin.name.startsWith('annotation')) {
+      if ((node.type === 'overlap_comparator' || node.type === 'ai_decision') && pin.name.startsWith('annotation')) {
         const removePinBtn = document.createElement('button');
         removePinBtn.textContent = '✕';
         removePinBtn.style.cssText = 'border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:0.65rem; margin-left:4px; padding:2px; display:inline-flex; align-items:center; justify-content:center; line-height:1;';
@@ -538,6 +591,35 @@
 
       inCol.appendChild(row);
     });
+
+    if (node.type === 'overlap_comparator' || node.type === 'ai_decision') {
+      const addRow = document.createElement('div');
+      addRow.className = 'pin-row';
+      addRow.style.cssText = 'padding: 2px 4px;';
+      
+      const addBtn = document.createElement('button');
+      addBtn.textContent = '+ Add Input';
+      addBtn.className = 'btn btn-secondary';
+      addBtn.style.cssText = 'font-size: 0.65rem; padding: 2px 6px; line-height: 1; border-radius: 4px; margin-left: 18px; margin-top: 2px;';
+      addBtn.onclick = (e) => {
+        e.stopPropagation();
+        const currentPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
+        let maxNum = 0;
+        currentPins.forEach(p => {
+          if (p.startsWith('annotation')) {
+            const num = parseInt(p.replace('annotation', ''));
+            if (num > maxNum) maxNum = num;
+          }
+        });
+        const nextNum = maxNum + 1;
+        currentPins.push(`annotation${nextNum}`);
+        node.properties.input_pins = currentPins;
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+      addRow.appendChild(addBtn);
+      inCol.appendChild(addRow);
+    }
 
     // Outputs Column (Right)
     const outCol = document.createElement('div');
@@ -1262,30 +1344,7 @@
       };
       body.appendChild(iouGroup);
 
-      // Add Annotation Input Button
-      const btnGroup = document.createElement('div');
-      btnGroup.className = 'field-group';
-      const addInputBtn = document.createElement('button');
-      addInputBtn.className = 'btn btn-secondary';
-      addInputBtn.textContent = '+ Add Annotation Input';
-      addInputBtn.style.cssText = 'width: 100%; font-size: 0.72rem; padding: 4px 8px; margin-top: 4px;';
-      addInputBtn.onclick = () => {
-        const currentPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
-        let maxNum = 0;
-        currentPins.forEach(p => {
-          if (p.startsWith('annotation')) {
-            const num = parseInt(p.replace('annotation', ''));
-            if (num > maxNum) maxNum = num;
-          }
-        });
-        const nextNum = maxNum + 1;
-        currentPins.push(`annotation${nextNum}`);
-        node.properties.input_pins = currentPins;
-        saveCanvas();
-        refreshNodeDOM(node);
-      };
-      btnGroup.appendChild(addInputBtn);
-      body.appendChild(btnGroup);
+
 
       // Resizable Preview frame
       const previewContainer = document.createElement('div');
@@ -1303,6 +1362,125 @@
       };
       body.appendChild(previewContainer);
       setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
+    } else if (node.type === 'ai_decision') {
+      const inputPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
+      if (!inputPins.includes('class')) {
+        const idx = inputPins.indexOf('image');
+        inputPins.splice(idx !== -1 ? idx + 1 : 1, 0, 'class');
+        node.properties.input_pins = inputPins;
+      }
+      const pins_in = inputPins.map(name => {
+        let label = name === 'image' ? 'Image' : (name === 'class' ? 'Class' : `Annotation ${name.replace('annotation', '')}`);
+        let optional = name === 'class';
+        return { name, label, optional };
+      });
+      const pins = createPinsLayout(node, pins_in, []);
+      body.appendChild(pins);
+
+      // Model selector with settings gear button
+      const modelGroup = document.createElement('div');
+      modelGroup.className = 'field-group';
+      modelGroup.innerHTML = `
+        <span class="field-label">AI Model</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <select id="model-select-${node.id}" class="field-input" style="flex:1; width:0; min-width:0;"></select>
+          <button id="settings-btn-${node.id}" class="ai-decision-settings-btn" title="Model Settings">
+            <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor">
+              <path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.47,5.34 14.86,5.08L14.47,2.42C14.43,2.18 14.22,2 13.97,2H9.97C9.72,2 9.51,2.18 9.47,2.42L9.08,5.08C8.47,5.34 7.9,5.66 7.38,6.05L4.89,5.05C4.67,4.96 4.4,5.05 4.27,5.27L2.27,8.73C2.15,8.95 2.2,9.22 2.4,9.37L4.5,11C4.47,11.34 4.45,11.67 4.45,12C4.45,12.33 4.47,12.65 4.5,13L2.4,14.63C2.2,14.78 2.15,15.05 2.27,15.27L4.27,18.73C4.40,18.95 4.67,19.04 4.89,18.95L7.38,17.95C7.9,18.34 8.47,18.66 9.08,18.92L9.47,21.58C9.51,21.82 9.72,22 9.97,22H13.97C14.22,22 14.43,21.82 14.47,21.58L14.86,18.92C15.47,18.66 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.04 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/>
+            </svg>
+          </button>
+        </div>
+      `;
+      const selectEl = modelGroup.querySelector('select');
+      const settingsBtn = modelGroup.querySelector('button');
+
+      const populateModels = () => {
+        selectEl.innerHTML = '';
+        _aiModels.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          if (m === node.properties.model) opt.selected = true;
+          selectEl.appendChild(opt);
+        });
+      };
+      populateModels();
+
+      selectEl.onchange = () => {
+        node.properties.model = selectEl.value;
+        saveCanvas();
+      };
+      
+      settingsBtn.onclick = () => {
+        showModelSettingsModal(node, populateModels);
+      };
+      body.appendChild(modelGroup);
+
+      // Class Rules container (exactly like SAM3 prompt bindings)
+      const rulesGroup = document.createElement('div');
+      rulesGroup.className = 'field-group';
+      rulesGroup.innerHTML = `
+        <span class="field-label">Class Rules Bindings</span>
+        <div id="rules-list-${node.id}" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;"></div>
+        <div id="class-list-container-${node.id}" style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.06); padding-top:8px;"></div>
+      `;
+      body.appendChild(rulesGroup);
+
+      // Global Rules textarea
+      const globalGroup = document.createElement('div');
+      globalGroup.className = 'field-group';
+      globalGroup.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span class="field-label" style="margin:0;">Global Rules / Context</span>
+          <button id="global-save-${node.id}" class="btn" style="display:none; padding:2px 8px; font-size:0.68rem; background:var(--accent); line-height:1; border-radius:4px; gap:4px; align-items:center; height:18px;">
+            💾 Save
+          </button>
+        </div>
+        <textarea class="field-input" style="width:100%; min-height:80px; font-family:inherit; resize:vertical; background:var(--bg-primary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-size:0.78rem; padding:6px 10px; box-sizing:border-box; outline:none; transition:border-color 0.15s;"></textarea>
+      `;
+      const txtArea = globalGroup.querySelector('textarea');
+      const globalSaveBtn = globalGroup.querySelector(`#global-save-${node.id}`);
+      
+      txtArea.value = node.properties.global_rules || '';
+      txtArea.oninput = () => {
+        globalSaveBtn.style.display = 'inline-flex';
+      };
+      
+      globalSaveBtn.onclick = (e) => {
+        e.preventDefault();
+        node.properties.global_rules = txtArea.value;
+        saveCanvas();
+        globalSaveBtn.style.display = 'none';
+        showToast('Global rules saved!', 'success');
+      };
+      body.appendChild(globalGroup);
+
+      // Resizable Preview frame
+      const previewContainer = document.createElement('div');
+      previewContainer.className = 'preview-container resizable-box';
+      previewContainer.id = `preview-container-${node.id}`;
+      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start;';
+      if (node.properties.preview_width) {
+        previewContainer.style.width = node.properties.preview_width + 'px';
+        previewContainer.style.height = node.properties.preview_height + 'px';
+      }
+      previewContainer.onmouseup = () => {
+        node.properties.preview_width = previewContainer.clientWidth;
+        node.properties.preview_height = previewContainer.clientHeight;
+        saveCanvas();
+      };
+      
+      const logsConsole = document.createElement('div');
+      logsConsole.className = 'yolo-logs-console';
+      logsConsole.id = `yolo-logs-${node.id}`;
+      logsConsole.style.cssText = 'height:60px; max-height:80px; font-family:monospace; font-size:0.7rem; background:#070a13; border:1px solid var(--border); border-radius:6px; padding:6px; color:#ef4444; overflow-y:auto; box-sizing:border-box; margin-top:4px; font-weight:normal; line-height:1.2;';
+      logsConsole.innerHTML = node.properties.last_logs || '<div style="color:var(--text-muted);">No logs available. Run flow to see output.</div>';
+      
+      body.append(previewContainer, logsConsole);
+      setTimeout(() => {
+        renderPreviewContent(node.id, node.properties.last_preview);
+        refreshAiDecisionRules(node.id);
+      }, 0);
     } else if (node.type === 'pointer') {
       const pins = createPinsLayout(node, 
         [
@@ -1688,12 +1866,215 @@
     });
   }
 
+  async function refreshAiDecisionRules(nodeId) {
+    const rulesList = document.getElementById(`rules-list-${nodeId}`);
+    if (!rulesList) return;
+
+    const node = _nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    if (typeof node.properties.class_rules === 'string') {
+      const oldStr = node.properties.class_rules;
+      node.properties.class_rules = {};
+      if (oldStr.trim() !== '') {
+        node.properties.class_rules[oldStr] = '0';
+      }
+      saveCanvas();
+    }
+
+    let connectedClassSourceNode = null;
+    for (const conn of _connections) {
+      if (conn.toNodeId === nodeId && conn.toPinName === 'class') {
+        const fromNode = _nodes.find(n => n.id === conn.fromNodeId);
+        if (fromNode) {
+          connectedClassSourceNode = fromNode;
+          break;
+        }
+      }
+    }
+
+    const classListContainer = document.getElementById(`class-list-container-${nodeId}`);
+
+    if (!connectedClassSourceNode) {
+      rulesList.innerHTML = `<span style="font-size:0.72rem; color:var(--text-muted);">Hubungkan output Class ke node ini untuk mengonfigurasi aturan kelas</span>`;
+      node.properties.class_rules = {};
+      if (classListContainer) classListContainer.innerHTML = '';
+      return;
+    }
+
+    const inputClasses = connectedClassSourceNode.properties.classes || [];
+    rulesList.innerHTML = '';
+
+    if (classListContainer) {
+      classListContainer.innerHTML = `
+        <span class="field-label" style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.03em;">Available Classes</span>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-top:4px; background:rgba(255,255,255,0.01); border:1px solid var(--border); border-radius:6px; padding:6px 10px;">
+          ${inputClasses.map((c, idx) => `
+            <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-family:monospace;">
+              <span style="color:var(--accent); font-weight:600;">[${idx}]</span>
+              <span style="color:var(--text-primary);">${c.name}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    const addForm = document.createElement('div');
+    addForm.style.cssText = 'display:flex; flex-direction:column; gap:6px; margin-bottom:8px; background:rgba(255,255,255,0.02); padding:8px; border:1px solid var(--border); border-radius:6px;';
+
+    const ruleTextarea = document.createElement('textarea');
+    ruleTextarea.className = 'field-input';
+    ruleTextarea.placeholder = 'Definisi aturan (misal: semua mobil kecil, minibus...)';
+    ruleTextarea.style.cssText = 'width:100%; min-height:48px; font-size:0.72rem; padding:4px 8px; resize:vertical; box-sizing:border-box;';
+
+    const selectRow = document.createElement('div');
+    selectRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+    const classSel = document.createElement('select');
+    classSel.className = 'binding-select';
+    classSel.style.cssText = 'flex:1; font-size:0.72rem; padding:4px;';
+    inputClasses.forEach((c, idx) => {
+      const opt = document.createElement('option');
+      opt.value = idx;
+      opt.textContent = c.name;
+      classSel.appendChild(opt);
+    });
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn';
+    addBtn.style.cssText = 'padding: 4px 12px; font-size:0.72rem; background:var(--accent);';
+    addBtn.textContent = 'Add Rule';
+    addBtn.onclick = (e) => {
+      e.preventDefault();
+      const rText = ruleTextarea.value.trim();
+      if (!rText) return;
+      if (!node.properties.class_rules) node.properties.class_rules = {};
+      node.properties.class_rules[rText] = classSel.value;
+      ruleTextarea.value = '';
+      refreshAiDecisionRules(nodeId);
+      saveCanvas();
+    };
+
+    selectRow.append(classSel, addBtn);
+    addForm.append(ruleTextarea, selectRow);
+    rulesList.appendChild(addForm);
+
+    const rules = node.properties.class_rules || {};
+    const ruleKeys = Object.keys(rules);
+
+    if (ruleKeys.length === 0) {
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'font-size:0.72rem; color:var(--text-muted); text-align:center; padding:4px;';
+      placeholder.textContent = 'Belum ada aturan kelas. Tambahkan di atas.';
+      rulesList.appendChild(placeholder);
+      return;
+    }
+
+    ruleKeys.forEach(rText => {
+      const row = document.createElement('div');
+      row.className = 'binding-row';
+      row.style.cssText = 'display:flex; flex-direction:column; gap:4px; border:1px solid var(--border); border-radius:6px; padding:6px; margin-bottom:6px; background:rgba(0,0,0,0.1);';
+
+      const ruleInput = document.createElement('textarea');
+      ruleInput.className = 'field-input';
+      ruleInput.value = rText;
+      ruleInput.disabled = true; // Locked by default
+      ruleInput.style.cssText = 'width:100%; min-height:36px; font-size:0.72rem; padding:4px 8px; resize:vertical; box-sizing:border-box; background:transparent; border:none; color:var(--text-primary); font-family:inherit; outline:none; cursor:default;';
+
+      const editRow = document.createElement('div');
+      editRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+      const select = document.createElement('select');
+      select.className = 'binding-select';
+      select.style.cssText = 'flex:1; font-size:0.72rem; padding:4px;';
+      select.disabled = true; // Locked by default
+      inputClasses.forEach((c, idx) => {
+        const opt = document.createElement('option');
+        opt.value = idx; opt.textContent = c.name;
+        select.appendChild(opt);
+      });
+      select.value = rules[rText];
+      select.onchange = () => {
+        node.properties.class_rules[currentKey] = select.value;
+        saveCanvas();
+      };
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'pointer-btn';
+      editBtn.style.cssText = 'border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; font-size:0.7rem; padding:2px 6px; border-radius:4px; display:inline-flex; align-items:center; justify-content:center;';
+      editBtn.textContent = '✏️';
+      editBtn.title = 'Edit Rule';
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'node-close-btn';
+      delBtn.textContent = '×';
+      delBtn.style.cssText = 'font-size: 1.1rem; padding: 0 6px; cursor:pointer; color:#ef4444; background:none; border:none;';
+
+      let isEditing = false;
+      let currentKey = rText;
+
+      const toggleEdit = () => {
+        isEditing = !isEditing;
+        if (isEditing) {
+          ruleInput.disabled = false;
+          select.disabled = false;
+          ruleInput.style.border = '1px solid var(--accent)';
+          ruleInput.style.background = 'var(--bg-primary)';
+          ruleInput.style.cursor = 'text';
+          editBtn.textContent = '✔️';
+          editBtn.title = 'Save Rule';
+          ruleInput.focus();
+        } else {
+          const newKey = ruleInput.value.trim();
+          if (newKey && newKey !== currentKey) {
+            const val = node.properties.class_rules[currentKey];
+            delete node.properties.class_rules[currentKey];
+            node.properties.class_rules[newKey] = val;
+            currentKey = newKey;
+          } else if (!newKey) {
+            delete node.properties.class_rules[currentKey];
+            refreshAiDecisionRules(nodeId);
+            saveCanvas();
+            return;
+          }
+          ruleInput.disabled = true;
+          select.disabled = true;
+          ruleInput.style.border = 'none';
+          ruleInput.style.background = 'transparent';
+          ruleInput.style.cursor = 'default';
+          editBtn.textContent = '✏️';
+          editBtn.title = 'Edit Rule';
+          saveCanvas();
+        }
+      };
+
+      editBtn.onclick = (e) => {
+        e.preventDefault();
+        toggleEdit();
+      };
+
+
+
+      delBtn.onclick = () => {
+        delete node.properties.class_rules[currentKey];
+        refreshAiDecisionRules(nodeId);
+        saveCanvas();
+      };
+
+      editRow.append(select, editBtn, delBtn);
+      row.append(ruleInput, editRow);
+      rulesList.appendChild(row);
+    });
+  }
+
   function refreshAllYoloBindings() {
     _nodes.forEach(n => {
       if (n.type === 'yolo_detector') {
         refreshYoloBindings(n.id);
       } else if (n.type === 'sam3') {
         refreshSam3Bindings(n.id);
+      } else if (n.type === 'ai_decision') {
+        refreshAiDecisionRules(n.id);
       }
     });
   }
@@ -1881,6 +2262,8 @@
                 refreshYoloBindings(toNodeId);
               } else if (targetNode.type === 'sam3') {
                 refreshSam3Bindings(toNodeId);
+              } else if (targetNode.type === 'ai_decision') {
+                refreshAiDecisionRules(toNodeId);
               } else if (targetNode.type === 'pointer') {
                 updatePointerNodeImage(toNodeId);
               }
@@ -1922,6 +2305,11 @@
       if (d.success) {
         _nodes = d.nodes || [];
         _connections = d.connections || [];
+        _activeTabId = d.tab_id;
+        
+        if (window.location.pathname === '/' || window.location.pathname === '') {
+          window.history.replaceState(null, '', '/' + d.tab_id);
+        }
       }
     } catch (e) {
       console.warn('Failed to load canvas', e);
@@ -2140,6 +2528,215 @@
       }
     }
   });
+
+  function showModelSettingsModal(node, onModalSaveCallback) {
+    const existing = document.getElementById('ai-model-settings-modal');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'ai-model-settings-modal';
+    overlay.className = 'modal-overlay';
+    
+    const box = document.createElement('div');
+    box.className = 'modal-box';
+    
+    // Header
+    const header = document.createElement('div');
+    header.className = 'modal-header';
+    header.innerHTML = `
+      <h3>AI Model Settings</h3>
+      <button class="modal-close">&times;</button>
+    `;
+    header.querySelector('.modal-close').onclick = () => overlay.remove();
+    box.appendChild(header);
+
+    // Body
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    box.appendChild(body);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const renderModalContent = () => {
+      body.innerHTML = '';
+
+      // 1. Endpoint selection & Refresh list
+      const endpointSection = document.createElement('div');
+      endpointSection.style.cssText = 'display:flex; flex-direction:column; gap:6px;';
+      endpointSection.innerHTML = `
+        <span class="modal-section-title">Active Endpoint</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <select id="modal-endpoint-select" class="field-input" style="flex:1; width:0; min-width:0;"></select>
+          <button id="modal-endpoint-refresh" class="btn btn-secondary" style="padding:6px 12px; font-size:0.75rem;">Refresh Models</button>
+        </div>
+      `;
+      const selectEndpoint = endpointSection.querySelector('#modal-endpoint-select');
+      const refreshBtn = endpointSection.querySelector('#modal-endpoint-refresh');
+
+      // Populate endpoints dropdown
+      _aiEndpoints.forEach(ep => {
+        const opt = document.createElement('option');
+        opt.value = ep.name;
+        opt.textContent = ep.name;
+        selectEndpoint.appendChild(opt);
+      });
+
+      // Handle refresh models list from active endpoint
+      refreshBtn.onclick = async () => {
+        const epName = selectEndpoint.value;
+        const ep = _aiEndpoints.find(e => e.name === epName);
+        if (!ep) {
+          showToast('No active endpoint selected.', 'error');
+          return;
+        }
+
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Pulling...';
+        showToast(`Pulling models from ${epName}...`, 'info');
+
+        try {
+          const r = await fetch('/api/ai-decision/check-endpoint', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: ep.url, api_key: ep.api_key })
+          });
+          const d = await r.json();
+          if (r.ok && d.success) {
+            _aiModels = d.models || [];
+            await saveAiConfig();
+            showToast(`Pulled ${d.models.length} models successfully!`, 'success');
+            onModalSaveCallback();
+            renderModalContent();
+          } else {
+            showToast('Failed to pull models: ' + (d.detail || d.error), 'error');
+          }
+        } catch (err) {
+          showToast('Error checking endpoint: ' + err.message, 'error');
+        } finally {
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = 'Refresh Models';
+        }
+      };
+      body.appendChild(endpointSection);
+
+      // 2. Models list
+      const modelsSection = document.createElement('div');
+      modelsSection.style.cssText = 'display:flex; flex-direction:column; gap:6px; flex:1; min-height:120px;';
+      modelsSection.innerHTML = `
+        <span class="modal-section-title">Available Models (${_aiModels.length})</span>
+        <div id="modal-models-list" style="flex:1; overflow-y:auto; max-height:200px; border:1px solid var(--border); border-radius:8px; padding:6px; background:rgba(10,15,26,0.3);"></div>
+      `;
+      const modelsListContainer = modelsSection.querySelector('#modal-models-list');
+      if (_aiModels.length === 0) {
+        modelsListContainer.innerHTML = '<div style="color:var(--text-muted); font-size:0.75rem; text-align:center; padding:12px;">No models in active list. Refresh an endpoint or add one.</div>';
+      } else {
+        _aiModels.forEach(m => {
+          const row = document.createElement('div');
+          row.className = 'model-item-row';
+          row.innerHTML = `
+            <span style="font-size:0.78rem;">${m}</span>
+            <button class="model-delete-btn" title="Delete Model">&times;</button>
+          `;
+          row.querySelector('.model-delete-btn').onclick = async () => {
+            _aiModels = _aiModels.filter(item => item !== m);
+            await saveAiConfig();
+            onModalSaveCallback();
+            renderModalContent();
+          };
+          modelsListContainer.appendChild(row);
+        });
+      }
+      body.appendChild(modelsSection);
+
+      // 3. Add Endpoint section
+      const addEndpointSection = document.createElement('div');
+      addEndpointSection.style.cssText = 'border-top:1px solid var(--border); padding-top:12px; display:flex; flex-direction:column; gap:8px;';
+      addEndpointSection.innerHTML = `
+        <span class="modal-section-title">Add / Edit Endpoint</span>
+        <input type="text" id="ep-name" class="field-input" placeholder="Endpoint Name (e.g. OpenAI, Ollama)" style="width:100%; box-sizing:border-box;" />
+        <input type="text" id="ep-url" class="field-input" placeholder="Endpoint URL (e.g. http://localhost:11434)" style="width:100%; box-sizing:border-box;" />
+        <input type="password" id="ep-key" class="field-input" placeholder="API Key (optional)" style="width:100%; box-sizing:border-box;" />
+        <div style="display:flex; gap:6px; margin-top:4px;">
+          <button id="btn-check-ep" class="btn btn-secondary" style="flex:1; padding:6px; font-size:0.75rem;">Check & Retrieve Models</button>
+          <button id="btn-save-ep" class="btn" style="flex:1; padding:6px; font-size:0.75rem; background:var(--accent);">Save Endpoint</button>
+        </div>
+      `;
+      const epNameInput = addEndpointSection.querySelector('#ep-name');
+      const epUrlInput = addEndpointSection.querySelector('#ep-url');
+      const epKeyInput = addEndpointSection.querySelector('#ep-key');
+      const checkEpBtn = addEndpointSection.querySelector('#btn-check-ep');
+      const saveEpBtn = addEndpointSection.querySelector('#btn-save-ep');
+
+      let retrievedModels = [];
+
+      checkEpBtn.onclick = async () => {
+        const url = epUrlInput.value.trim();
+        const api_key = epKeyInput.value.trim();
+        if (!url) {
+          showToast('Endpoint URL is required to check.', 'error');
+          return;
+        }
+
+        checkEpBtn.disabled = true;
+        checkEpBtn.textContent = 'Checking...';
+        showToast('Connecting to endpoint...', 'info');
+
+        try {
+          const r = await fetch('/api/ai-decision/check-endpoint', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, api_key })
+          });
+          const d = await r.json();
+          if (r.ok && d.success) {
+            retrievedModels = d.models || [];
+            showToast(`Success! Found ${retrievedModels.length} models. Click Save to store this endpoint and overwrite models list.`, 'success');
+          } else {
+            showToast('Endpoint check failed: ' + (d.detail || d.error), 'error');
+          }
+        } catch (err) {
+          showToast('Endpoint error: ' + err.message, 'error');
+        } finally {
+          checkEpBtn.disabled = false;
+          checkEpBtn.textContent = 'Check & Retrieve Models';
+        }
+      };
+
+      saveEpBtn.onclick = async () => {
+        const name = epNameInput.value.trim();
+        const url = epUrlInput.value.trim();
+        const api_key = epKeyInput.value.trim();
+
+        if (!name || !url) {
+          showToast('Name and Endpoint URL are required.', 'error');
+          return;
+        }
+
+        // Add or replace endpoint in local array
+        const existingEpIdx = _aiEndpoints.findIndex(e => e.name === name);
+        const epData = { name, url, api_key };
+        if (existingEpIdx !== -1) {
+          _aiEndpoints[existingEpIdx] = epData;
+        } else {
+          _aiEndpoints.push(epData);
+        }
+
+        // Overwrite active models list if we retrieved models during check
+        if (retrievedModels.length > 0) {
+          _aiModels = retrievedModels;
+        }
+
+        await saveAiConfig();
+        showToast('Endpoint saved successfully!', 'success');
+        onModalSaveCallback();
+        renderModalContent();
+      };
+
+      body.appendChild(addEndpointSection);
+    };
+
+    renderModalContent();
+  }
 
   // Run initial loading
   window.addEventListener('DOMContentLoaded', init);
