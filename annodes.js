@@ -198,6 +198,14 @@
           preview_width: 320,
           preview_height: 240
         };
+      } else if (type === 'overlap_comparator') {
+        properties = {
+          input_pins: ['image', 'annotation1', 'annotation2'],
+          iou_threshold: 0.5,
+          last_preview: null,
+          preview_width: 320,
+          preview_height: 240
+        };
       }
     }
 
@@ -234,6 +242,14 @@
     refreshAllYoloBindings();
   }
 
+  function refreshNodeDOM(node) {
+    const oldEl = document.getElementById(node.id);
+    if (!oldEl) return;
+    oldEl.remove();
+    renderNodeDOM(node);
+    renderConnections();
+  }
+
   // --- Pins Layout Helper ---
   function createPinsLayout(node, inputs, outputs) {
     const container = document.createElement('div');
@@ -265,6 +281,22 @@
       }
 
       row.append(pinEl, label);
+
+      if (node.type === 'overlap_comparator' && pin.name.startsWith('annotation')) {
+        const removePinBtn = document.createElement('button');
+        removePinBtn.textContent = '✕';
+        removePinBtn.style.cssText = 'border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:0.65rem; margin-left:4px; padding:2px; display:inline-flex; align-items:center; justify-content:center; line-height:1;';
+        removePinBtn.title = 'Hapus input ini';
+        removePinBtn.onclick = (e) => {
+          e.stopPropagation();
+          _connections = _connections.filter(c => !(c.toNodeId === node.id && c.toPinName === pin.name));
+          node.properties.input_pins = (node.properties.input_pins || []).filter(name => name !== pin.name);
+          saveCanvas();
+          refreshNodeDOM(node);
+        };
+        row.appendChild(removePinBtn);
+      }
+
       inCol.appendChild(row);
     });
 
@@ -315,13 +347,19 @@
 
     const items = Array.isArray(previewData) ? previewData : [previewData];
 
-    items.forEach((b64, idx) => {
+    items.forEach((item, idx) => {
+      const b64 = (typeof item === 'object' && item !== null) ? item.image : item;
+      const customLabel = (typeof item === 'object' && item !== null) ? item.label : null;
+
       const itemWrapper = document.createElement('div');
       itemWrapper.style.cssText = 'width: 100%; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 4px; background: rgba(255,255,255,0.02);';
 
       const label = document.createElement('span');
       label.style.cssText = 'font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; width: fit-content;';
-      if (items.length > 1) {
+      
+      if (customLabel) {
+        label.textContent = customLabel;
+      } else if (items.length > 1) {
         label.textContent = idx === 0 ? '1. Overall Detection Segment' : `2. Detection #${idx} (BBox Crop | Segment Crop)`;
       } else {
         label.textContent = 'Preview Output';
@@ -784,6 +822,74 @@
         saveCanvas();
       };
       
+      body.appendChild(previewContainer);
+      setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
+    } else if (node.type === 'overlap_comparator') {
+      const inputPins = node.properties.input_pins || ['image', 'annotation1', 'annotation2'];
+      const pins_in = inputPins.map(name => {
+        let label = name === 'image' ? 'Image' : `Annotation ${name.replace('annotation', '')}`;
+        return { name, label };
+      });
+      const pins = createPinsLayout(node, pins_in, []);
+      body.appendChild(pins);
+
+      // IoU Threshold Slider
+      const iouGroup = document.createElement('div');
+      iouGroup.className = 'field-group';
+      iouGroup.innerHTML = `
+        <div style="display:flex; justify-content:space-between;">
+          <span class="field-label">IoU Threshold</span>
+          <span id="iou-val-${node.id}" style="font-size:0.75rem; color:var(--accent); font-weight:600;">${Math.round(node.properties.iou_threshold*100)}%</span>
+        </div>
+        <input type="range" min="0" max="100" value="${Math.round(node.properties.iou_threshold*100)}" style="accent-color:var(--accent); cursor:pointer;" />
+      `;
+      const iouSlider = iouGroup.querySelector('input');
+      iouSlider.oninput = () => {
+        document.getElementById(`iou-val-${node.id}`).textContent = iouSlider.value + '%';
+        node.properties.iou_threshold = parseFloat(iouSlider.value) / 100;
+        saveCanvas();
+      };
+      body.appendChild(iouGroup);
+
+      // Add Annotation Input Button
+      const btnGroup = document.createElement('div');
+      btnGroup.className = 'field-group';
+      const addInputBtn = document.createElement('button');
+      addInputBtn.className = 'btn btn-secondary';
+      addInputBtn.textContent = '+ Add Annotation Input';
+      addInputBtn.style.cssText = 'width: 100%; font-size: 0.72rem; padding: 4px 8px; margin-top: 4px;';
+      addInputBtn.onclick = () => {
+        const currentPins = node.properties.input_pins || ['image', 'annotation1', 'annotation2'];
+        let maxNum = 0;
+        currentPins.forEach(p => {
+          if (p.startsWith('annotation')) {
+            const num = parseInt(p.replace('annotation', ''));
+            if (num > maxNum) maxNum = num;
+          }
+        });
+        const nextNum = maxNum + 1;
+        currentPins.push(`annotation${nextNum}`);
+        node.properties.input_pins = currentPins;
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+      btnGroup.appendChild(addInputBtn);
+      body.appendChild(btnGroup);
+
+      // Resizable Preview frame
+      const previewContainer = document.createElement('div');
+      previewContainer.className = 'preview-container resizable-box';
+      previewContainer.id = `preview-container-${node.id}`;
+      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start;';
+      if (node.properties.preview_width) {
+        previewContainer.style.width = node.properties.preview_width + 'px';
+        previewContainer.style.height = node.properties.preview_height + 'px';
+      }
+      previewContainer.onmouseup = () => {
+        node.properties.preview_width = previewContainer.clientWidth;
+        node.properties.preview_height = previewContainer.clientHeight;
+        saveCanvas();
+      };
       body.appendChild(previewContainer);
       setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
     }
@@ -1305,6 +1411,64 @@
       showToast('Gagal memuat canvas dari DB', 'error');
     }
   }
+   async function handleFlowEvent(ev) {
+    if (ev.type === 'start') {
+      const nodeEl = document.getElementById(ev.node_id);
+      if (nodeEl) {
+        nodeEl.classList.add('processing-glow');
+      }
+    } else if (ev.type === 'end') {
+      const nodeEl = document.getElementById(ev.node_id);
+      if (nodeEl) {
+        nodeEl.classList.remove('processing-glow');
+      }
+    } else if (ev.type === 'preview') {
+      const nodeId = ev.node_id;
+      const node = _nodes.find(n => n.id === nodeId);
+      if (node) {
+        const previewData = ev.preview;
+        node.properties.last_preview = previewData;
+        node.properties.last_logs = ev.logs;
+
+        if (node.type === 'preview' || node.type === 'overlap_comparator') {
+          renderPreviewContent(nodeId, previewData);
+          
+          const nodeEl = document.getElementById(nodeId);
+          if (nodeEl) {
+            nodeEl.classList.add('preview-pulse-glow');
+            setTimeout(() => {
+              nodeEl.classList.remove('preview-pulse-glow');
+            }, 2000);
+          }
+        } else {
+          const previewImg = document.getElementById(`preview-img-${nodeId}`);
+          const previewPlaceholder = document.querySelector(`#preview-container-${nodeId} .preview-placeholder`);
+          const base64 = Array.isArray(previewData) ? previewData[0] : previewData;
+          
+          if (previewImg && base64) {
+            previewImg.src = `data:image/jpeg;base64,${base64}`;
+            previewImg.style.display = 'block';
+            if (previewPlaceholder) previewPlaceholder.style.display = 'none';
+          }
+        }
+
+        if (ev.logs) {
+          const logsConsole = document.getElementById(`yolo-logs-${nodeId}`);
+          if (logsConsole) {
+            logsConsole.innerHTML = ev.logs;
+            logsConsole.scrollTop = logsConsole.scrollHeight;
+          }
+        }
+        
+        saveCanvas();
+      }
+    } else if (ev.type === 'done') {
+      showToast(`Berhasil memproses: ${ev.filename || ''}`, 'success');
+      saveCanvas();
+    } else if (ev.type === 'error') {
+      showToast(ev.message || 'Terjadi kesalahan saat memproses flow.', 'error');
+    }
+  }
 
   // --- Execute Flow (Run Flow) ---
   window.runFlow = async function () {
@@ -1312,6 +1476,11 @@
     
     // Auto save layout before execution
     await saveCanvas();
+
+    // Reset any existing processing glow styles
+    document.querySelectorAll('.node').forEach(el => {
+      el.classList.remove('processing-glow', 'preview-pulse-glow');
+    });
 
     try {
       const r = await fetch('/api/run-flow', {
@@ -1323,62 +1492,50 @@
         })
       });
       
-      const d = await r.json();
-      if (r.ok && d.success) {
-        showToast(`Berhasil memproses: ${d.filename || ''}`, 'success');
+      if (!r.ok) {
+        throw new Error(`HTTP error! status: ${r.status}`);
+      }
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
         
-        // Loop over the previews returned by backend to update node image containers
-        if (d.previews) {
-          Object.keys(d.previews).forEach(nodeId => {
-            const node = _nodes.find(n => n.id === nodeId);
-            if (node) {
-              const previewData = d.previews[nodeId];
-              node.properties.last_preview = previewData;
+        buffer = lines.pop(); // save trailing line
 
-              if (node.type === 'preview') {
-                renderPreviewContent(nodeId, previewData);
-              } else {
-                const previewImg = document.getElementById(`preview-img-${nodeId}`);
-                const previewPlaceholder = document.querySelector(`#preview-container-${nodeId} .preview-placeholder`);
-                const base64 = Array.isArray(previewData) ? previewData[0] : previewData;
-                
-                if (previewImg && base64) {
-                  previewImg.src = `data:image/jpeg;base64,${base64}`;
-                  previewImg.style.display = 'block';
-                  if (previewPlaceholder) previewPlaceholder.style.display = 'none';
-                }
-              }
-            }
-          });
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            await handleFlowEvent(ev);
+          } catch (err) {
+            console.error('Failed to parse event line:', line, err);
+          }
         }
+      }
 
-        // Loop over logs returned by backend to update console log outputs
-        if (d.logs) {
-          Object.keys(d.logs).forEach(nodeId => {
-            const node = _nodes.find(n => n.id === nodeId);
-            if (node) {
-              const logsHtml = d.logs[nodeId];
-              node.properties.last_logs = logsHtml;
-
-              const logsConsole = document.getElementById(`yolo-logs-${nodeId}`);
-              if (logsConsole) {
-                logsConsole.innerHTML = logsHtml;
-                logsConsole.scrollTop = logsConsole.scrollHeight;
-              }
-            }
-          });
+      if (buffer.trim()) {
+        try {
+          const ev = JSON.parse(buffer);
+          await handleFlowEvent(ev);
+        } catch (err) {
+          console.error('Failed to parse final event buffer:', buffer, err);
         }
-        
-        // Save the updated previews/logs properties to DB
-        saveCanvas();
-
-      } else {
-        const errorMsg = d.detail || d.error || 'Terjadi kesalahan saat memproses flow.';
-        showToast(errorMsg, 'error');
       }
     } catch (e) {
       console.error('Run flow error:', e);
       showToast('Gagal terhubung ke backend server', 'error');
+      
+      // Cleanup glows
+      document.querySelectorAll('.node').forEach(el => {
+        el.classList.remove('processing-glow', 'preview-pulse-glow');
+      });
     }
   };
 

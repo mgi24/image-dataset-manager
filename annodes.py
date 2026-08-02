@@ -6,13 +6,15 @@ import base64
 import argparse
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import cv2
 import numpy as np
 import threading
+import queue
+import concurrent.futures
 
 # Parse command line args
 parser = argparse.ArgumentParser(description="Annodes Server")
@@ -218,6 +220,72 @@ def hex_to_bgr(hex_str: str):
     rgb = tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
     return (rgb[2], rgb[1], rgb[0]) # BGR
 
+def calculate_iou(annoA, annoB, h, w):
+    def get_bbox(anno):
+        coords = anno["coords"]
+        is_segment = anno.get("is_segment", len(coords) > 4)
+        if is_segment:
+            xs = coords[0::2]
+            ys = coords[1::2]
+            if len(xs) > 0 and len(ys) > 0:
+                return int(min(xs)*w), int(min(ys)*h), int(max(xs)*w), int(max(ys)*h)
+        else:
+            if len(coords) >= 4:
+                xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                return int((xc - bw/2)*w), int((yc - bh/2)*h), int((xc + bw/2)*w), int((yc + bh/2)*h)
+        return 0, 0, 0, 0
+
+    ax1, ay1, ax2, ay2 = get_bbox(annoA)
+    bx1, by1, bx2, by2 = get_bbox(annoB)
+
+    # Check intersection
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+
+    # Union bounding box
+    ux1 = min(ax1, bx1)
+    uy1 = min(ay1, by1)
+    ux2 = max(ax2, bx2)
+    uy2 = max(ay2, by2)
+
+    uw = ux2 - ux1
+    uh = uy2 - uy1
+    if uw <= 0 or uh <= 0:
+        return 0.0
+
+    # Draw offset masks
+    maskA = np.zeros((uh, uw), dtype=np.uint8)
+    maskB = np.zeros((uh, uw), dtype=np.uint8)
+
+    def draw_mask(mask, anno, ox, oy):
+        coords = anno["coords"]
+        is_segment = anno.get("is_segment", len(coords) > 4)
+        if is_segment:
+            pts_px = np.array([[int(coords[i]*w) - ox, int(coords[i+1]*h) - oy] for i in range(0, len(coords), 2)], dtype=np.int32)
+            if len(pts_px) >= 3:
+                cv2.fillPoly(mask, [pts_px], 255)
+        else:
+            if len(coords) >= 4:
+                xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                x1 = int((xc - bw/2)*w) - ox
+                y1 = int((yc - bh/2)*h) - oy
+                x2 = int((xc + bw/2)*w) - ox
+                y2 = int((yc + bh/2)*h) - oy
+                cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+
+    draw_mask(maskA, annoA, ux1, uy1)
+    draw_mask(maskB, annoB, ux1, uy1)
+
+    intersection = np.logical_and(maskA, maskB).sum()
+    union = np.logical_or(maskA, maskB).sum()
+
+    return float(intersection) / float(union) if union > 0 else 0.0
+
 @app.post("/api/run-flow")
 def run_flow(payload: RunFlowRequest):
     nodes = {n["id"]: n for n in payload.nodes}
@@ -274,14 +342,17 @@ def run_flow(payload: RunFlowRequest):
         conn.close()
 
     # Cache for evaluation
+    event_queue = queue.Queue()
     eval_cache = {}
     previews = {}
     logs = {}
+    cache_lock = threading.RLock()
 
     def evaluate(node_id: str, pin_name: str):
         cache_key = (node_id, pin_name)
-        if cache_key in eval_cache:
-            return eval_cache[cache_key]
+        with cache_lock:
+            if cache_key in eval_cache:
+                return eval_cache[cache_key]
 
         node = nodes.get(node_id)
         if not node:
@@ -343,18 +414,22 @@ def run_flow(payload: RunFlowRequest):
                     "color": c.get("color", "#a855f7")
                 })
 
-            # Cache all outputs for this input node
-            eval_cache[(node_id, "image")] = img_path
-            eval_cache[(node_id, "annotation")] = parsed_annotations
-            eval_cache[(node_id, "class")] = node_classes
+            with cache_lock:
+                # Cache all outputs for this input node
+                eval_cache[(node_id, "image")] = img_path
+                eval_cache[(node_id, "annotation")] = parsed_annotations
+                eval_cache[(node_id, "class")] = node_classes
 
-            return eval_cache[cache_key]
+                return eval_cache[cache_key]
 
         # 2. YOLO Node
         elif node["type"] == "yolo_detector":
+            event_queue.put({"type": "start", "node_id": node_id})
+            
             # Get connected image input
             img_source = connections_to.get((node_id, "image"))
             if not img_source:
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=400, detail="YOLO Detector node is missing connected 'Image' input")
             src_image_path = evaluate(img_source[0], img_source[1])
 
@@ -378,6 +453,7 @@ def run_flow(payload: RunFlowRequest):
                 model_file = yolo_model_name
             model_path = os.path.join(MODEL_DIR, model_file)
             if not os.path.exists(model_path):
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=400, detail=f"YOLO model '{model_file}' not found in model/ folder")
 
             # Capture stdout/stderr/logging
@@ -402,6 +478,7 @@ def run_flow(payload: RunFlowRequest):
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
             except Exception as e:
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=500, detail=f"YOLO inference error: {str(e)}")
             finally:
                 yolo_logger.removeHandler(ch)
@@ -413,6 +490,7 @@ def run_flow(payload: RunFlowRequest):
             # Load raw image to draw YOLO preview
             img = cv2.imread(src_image_path)
             if img is None:
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for YOLO preview")
             h, w = img.shape[:2]
 
@@ -500,7 +578,6 @@ def run_flow(payload: RunFlowRequest):
             # Base64 encode YOLO preview image
             _, buffer = cv2.imencode(".jpg", img)
             preview_b64 = base64.b64encode(buffer).decode("utf-8")
-            previews[node_id] = preview_b64
 
             # Generate YOLO node logs HTML
             log_html = ""
@@ -513,20 +590,33 @@ def run_flow(payload: RunFlowRequest):
                     log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}%</div>"
             else:
                 log_html += '<div style="color:var(--text-muted);">No detections</div>'
-            logs[node_id] = log_html
 
-            # Cache YOLO output pins
-            eval_cache[(node_id, "image")] = src_image_path
-            eval_cache[(node_id, "annotation")] = yolo_annotations
-            eval_cache[(node_id, "class")] = src_classes
+            with cache_lock:
+                previews[node_id] = preview_b64
+                logs[node_id] = log_html
+                # Cache YOLO output pins
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "annotation")] = yolo_annotations
+                eval_cache[(node_id, "class")] = src_classes
+
+            event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": preview_b64,
+                "logs": log_html
+            })
 
             return eval_cache[cache_key]
 
         # 3. SAM3 Node
         elif node["type"] == "sam3":
+            event_queue.put({"type": "start", "node_id": node_id})
+
             # Get connected image input
             img_source = connections_to.get((node_id, "image"))
             if not img_source:
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=400, detail="SAM3 node is missing connected 'Image' input")
             src_image_path = evaluate(img_source[0], img_source[1])
 
@@ -550,6 +640,7 @@ def run_flow(payload: RunFlowRequest):
                 model_file = sam3_model_name
             model_path = os.path.join(MODEL_DIR, model_file)
             if not os.path.exists(model_path):
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=400, detail=f"SAM3 model '{model_file}' not found in model/ folder")
 
             # Extract list of prompt texts from keys of prompt_bindings
@@ -557,20 +648,31 @@ def run_flow(payload: RunFlowRequest):
 
             if not prompts:
                 # If no prompts are defined, return empty
-                eval_cache[(node_id, "image")] = src_image_path
-                eval_cache[(node_id, "annotation")] = []
-                eval_cache[(node_id, "class")] = src_classes
-                
                 # Copy image for preview (or just load it)
                 img = cv2.imread(src_image_path)
                 if img is not None:
                     _, buffer = cv2.imencode(".jpg", img)
                     preview_b64 = base64.b64encode(buffer).decode("utf-8")
-                    previews[node_id] = preview_b64
                 else:
-                    previews[node_id] = ""
+                    preview_b64 = ""
                 
-                logs[node_id] = '<div style="color:var(--text-muted);">No prompts configured in prompt bindings. Add a prompt binding first.</div>'
+                log_html = '<div style="color:var(--text-muted);">No prompts configured in prompt bindings. Add a prompt binding first.</div>'
+                
+                with cache_lock:
+                    eval_cache[(node_id, "image")] = src_image_path
+                    eval_cache[(node_id, "annotation")] = []
+                    eval_cache[(node_id, "class")] = src_classes
+                    previews[node_id] = preview_b64
+                    logs[node_id] = log_html
+
+                event_queue.put({"type": "end", "node_id": node_id})
+                event_queue.put({
+                    "type": "preview",
+                    "node_id": node_id,
+                    "preview": preview_b64,
+                    "logs": log_html
+                })
+                
                 return eval_cache[cache_key]
 
             # Capture stdout/stderr/logging
@@ -596,6 +698,7 @@ def run_flow(payload: RunFlowRequest):
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
             except Exception as e:
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=500, detail=f"SAM3 inference error: {str(e)}")
             finally:
                 yolo_logger.removeHandler(ch)
@@ -607,6 +710,7 @@ def run_flow(payload: RunFlowRequest):
             # Load raw image to draw SAM3 preview
             img = cv2.imread(src_image_path)
             if img is None:
+                event_queue.put({"type": "end", "node_id": node_id})
                 raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for SAM3 preview")
             h, w = img.shape[:2]
 
@@ -693,7 +797,6 @@ def run_flow(payload: RunFlowRequest):
             # Base64 encode SAM3 preview image
             _, buffer = cv2.imencode(".jpg", img)
             preview_b64 = base64.b64encode(buffer).decode("utf-8")
-            previews[node_id] = preview_b64
 
             # Generate SAM3 node logs HTML
             log_html = ""
@@ -706,219 +809,517 @@ def run_flow(payload: RunFlowRequest):
                     log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}%</div>"
             else:
                 log_html += '<div style="color:var(--text-muted);">No detections</div>'
-            logs[node_id] = log_html
 
-            # Cache SAM3 output pins
-            eval_cache[(node_id, "image")] = src_image_path
-            eval_cache[(node_id, "annotation")] = sam3_annotations
-            eval_cache[(node_id, "class")] = src_classes
+            with cache_lock:
+                previews[node_id] = preview_b64
+                logs[node_id] = log_html
+                # Cache SAM3 output pins
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "annotation")] = sam3_annotations
+                eval_cache[(node_id, "class")] = src_classes
+
+            event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": preview_b64,
+                "logs": log_html
+            })
 
             return eval_cache[cache_key]
 
         raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
 
-    # Process Preview Nodes (leaf nodes)
-    preview_nodes_found = False
-    for n in payload.nodes:
-        if n["type"] == "preview":
-            preview_nodes_found = True
-            p_node_id = n["id"]
+    def run_all():
+        try:
+            preview_nodes = [n for n in payload.nodes if n["type"] in ("preview", "overlap_comparator")]
             
-            # Resolve inputs
-            img_source = connections_to.get((p_node_id, "image"))
-            anno_source = connections_to.get((p_node_id, "annotation"))
-            class_source = connections_to.get((p_node_id, "class"))
+            if preview_nodes:
+                def process_preview(n):
+                    p_node_id = n["id"]
+                    if n["type"] == "preview":
+                        img_source = connections_to.get((p_node_id, "image"))
+                        anno_source = connections_to.get((p_node_id, "annotation"))
+                        class_source = connections_to.get((p_node_id, "class"))
 
-            if not img_source or not anno_source:
-                raise HTTPException(status_code=400, detail="Preview node is missing connected 'Image' or 'Annotation' input")
+                        if not img_source or not anno_source:
+                            event_queue.put({"type": "error", "message": "Preview node is missing connected 'Image' or 'Annotation' input"})
+                            return
 
-            src_image_path = evaluate(img_source[0], img_source[1])
-            src_annotations = evaluate(anno_source[0], anno_source[1])
-            
-            src_classes = []
-            if class_source:
-                src_classes = evaluate(class_source[0], class_source[1])
+                        event_queue.put({"type": "start", "node_id": p_node_id})
 
-            # Draw outline + 30% fill
-            img = cv2.imread(src_image_path)
-            if img is None:
-                raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for Preview rendering")
-            
-            h, w = img.shape[:2]
+                        try:
+                            src_image_path = evaluate(img_source[0], img_source[1])
+                            src_annotations = evaluate(anno_source[0], anno_source[1])
+                            
+                            src_classes = []
+                            if class_source:
+                                src_classes = evaluate(class_source[0], class_source[1])
 
-            # We will draw all annotations on annotated_img for the top "whole image" view
-            annotated_img = img.copy()
-            detection_crops_b64 = []
+                            img = cv2.imread(src_image_path)
+                            if img is None:
+                                event_queue.put({"type": "end", "node_id": p_node_id})
+                                event_queue.put({"type": "error", "message": f"Failed to load image '{src_image_path}' for Preview rendering"})
+                                return
+                            
+                            h, w = img.shape[:2]
+                            annotated_img = img.copy()
+                            detection_crops_b64 = []
 
-            for anno in src_annotations:
-                class_id = anno["class_id"]
-                coords = anno["coords"]
-                is_segment = anno.get("is_segment", len(coords) > 4)
-                conf = anno.get("confidence")
+                            for anno in src_annotations:
+                                class_id = anno["class_id"]
+                                coords = anno["coords"]
+                                is_segment = anno.get("is_segment", len(coords) > 4)
+                                conf = anno.get("confidence")
 
-                # Resolve class name & color
-                target_name = f"Class {class_id}"
-                target_color = "#10b981" # default emerald
-                
-                if class_id < len(src_classes):
-                    target_name = src_classes[class_id]["name"]
-                    target_color = src_classes[class_id]["color"]
-                
-                bgr = hex_to_bgr(target_color)
+                                target_name = f"Class {class_id}"
+                                target_color = "#10b981"
+                                if class_id < len(src_classes):
+                                    target_name = src_classes[class_id]["name"]
+                                    target_color = src_classes[class_id]["color"]
+                                
+                                bgr = hex_to_bgr(target_color)
 
-                lbl_x, lbl_y = 0, 0
-                if is_segment:
-                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                    if len(pts_px) >= 3:
-                        overlay = annotated_img.copy()
-                        cv2.fillPoly(overlay, [pts_px], bgr)
-                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
-                        cv2.polylines(annotated_img, [pts_px], True, bgr, 2)
-                        
-                        min_y_idx = np.argmin(pts_px[:, 1])
-                        lbl_x = int(pts_px[min_y_idx][0])
-                        lbl_y = int(pts_px[min_y_idx][1])
-                else:
-                    # bounding box: [xc, yc, bw, bh]
-                    if len(coords) >= 4:
-                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
-                        x1 = int((xc - bw/2) * w)
-                        y1 = int((yc - bh/2) * h)
-                        x2 = int((xc + bw/2) * w)
-                        y2 = int((yc + bh/2) * h)
-                        
-                        overlay = annotated_img.copy()
-                        cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
-                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
-                        cv2.rectangle(annotated_img, (x1, y1), (x2, y2), bgr, 2)
-                        lbl_x, lbl_y = x1, y1
+                                lbl_x, lbl_y = 0, 0
+                                if is_segment:
+                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                    if len(pts_px) >= 3:
+                                        overlay = annotated_img.copy()
+                                        cv2.fillPoly(overlay, [pts_px], bgr)
+                                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
+                                        cv2.polylines(annotated_img, [pts_px], True, bgr, 2)
+                                        
+                                        min_y_idx = np.argmin(pts_px[:, 1])
+                                        lbl_x = int(pts_px[min_y_idx][0])
+                                        lbl_y = int(pts_px[min_y_idx][1])
+                                else:
+                                    if len(coords) >= 4:
+                                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                                        x1 = int((xc - bw/2) * w)
+                                        y1 = int((yc - bh/2) * h)
+                                        x2 = int((xc + bw/2) * w)
+                                        y2 = int((yc + bh/2) * h)
+                                        
+                                        overlay = annotated_img.copy()
+                                        cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                                        cv2.addWeighted(overlay, 0.3, annotated_img, 0.7, 0, annotated_img)
+                                        cv2.rectangle(annotated_img, (x1, y1), (x2, y2), bgr, 2)
+                                        lbl_x, lbl_y = x1, y1
 
-                # Draw Text Label if class_source is connected
-                if class_source:
-                    lbl_txt = target_name
-                    if conf is not None:
-                        lbl_txt += f" {conf:.2f}"
-                    (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                    cv2.rectangle(annotated_img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
-                    cv2.putText(annotated_img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                                if class_source:
+                                    lbl_txt = target_name
+                                    if conf is not None:
+                                        lbl_txt += f" {conf:.2f}"
+                                    (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                                    cv2.rectangle(annotated_img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                                    cv2.putText(annotated_img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
 
-                # Now calculate the crop bounding box for this individual detection
-                if is_segment:
-                    xs = coords[0::2]
-                    ys = coords[1::2]
-                    if len(xs) > 0 and len(ys) > 0:
-                        xmin, xmax = min(xs), max(xs)
-                        ymin, ymax = min(ys), max(ys)
-                        cx1 = int(xmin * w)
-                        cy1 = int(ymin * h)
-                        cx2 = int(xmax * w)
-                        cy2 = int(ymax * h)
-                    else:
-                        continue
-                else:
-                    if len(coords) >= 4:
-                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
-                        cx1 = int((xc - bw/2) * w)
-                        cy1 = int((yc - bh/2) * h)
-                        cx2 = int((xc + bw/2) * w)
-                        cy2 = int((yc + bh/2) * h)
-                    else:
-                        continue
+                                # Calculate crop BBox
+                                if is_segment:
+                                    xs = coords[0::2]
+                                    ys = coords[1::2]
+                                    if len(xs) > 0 and len(ys) > 0:
+                                        xmin, xmax = min(xs), max(xs)
+                                        ymin, ymax = min(ys), max(ys)
+                                        cx1 = int(xmin * w)
+                                        cy1 = int(ymin * h)
+                                        cx2 = int(xmax * w)
+                                        cy2 = int(ymax * h)
+                                    else:
+                                        continue
+                                else:
+                                    if len(coords) >= 4:
+                                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                                        cx1 = int((xc - bw/2) * w)
+                                        cy1 = int((yc - bh/2) * h)
+                                        cx2 = int((xc + bw/2) * w)
+                                        cy2 = int((yc + bh/2) * h)
+                                    else:
+                                        continue
 
-                cx1 = max(0, min(cx1, w - 1))
-                cx2 = max(0, min(cx2, w - 1))
-                cy1 = max(0, min(cy1, h - 1))
-                cy2 = max(0, min(cy2, h - 1))
+                                cx1 = max(0, min(cx1, w - 1))
+                                cx2 = max(0, min(cx2, w - 1))
+                                cy1 = max(0, min(cy1, h - 1))
+                                cy2 = max(0, min(cy2, h - 1))
 
-                crop_w = cx2 - cx1
-                crop_h = cy2 - cy1
-                if crop_w <= 0 or crop_h <= 0:
-                    continue
+                                crop_w = cx2 - cx1
+                                crop_h = cy2 - cy1
+                                if crop_w <= 0 or crop_h <= 0:
+                                    continue
 
-                # Crop raw image and draw its own annotation outline/overlay
-                left_crop = img[cy1:cy2, cx1:cx2].copy()
-                if is_segment:
-                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                    pts_offset = pts_px - [cx1, cy1]
-                    if len(pts_offset) >= 3:
-                        overlay_crop = left_crop.copy()
-                        cv2.fillPoly(overlay_crop, [pts_offset], bgr)
-                        cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
-                        cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
-                else:
-                    overlay_crop = left_crop.copy()
-                    cv2.rectangle(overlay_crop, (0, 0), (crop_w, crop_h), bgr, -1)
-                    cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
-                    cv2.rectangle(left_crop, (0, 0), (crop_w, crop_h), bgr, 2)
+                                left_crop = img[cy1:cy2, cx1:cx2].copy()
+                                if is_segment:
+                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                    pts_offset = pts_px - [cx1, cy1]
+                                    if len(pts_offset) >= 3:
+                                        overlay_crop = left_crop.copy()
+                                        cv2.fillPoly(overlay_crop, [pts_offset], bgr)
+                                        cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                                        cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
+                                else:
+                                    overlay_crop = left_crop.copy()
+                                    cv2.rectangle(overlay_crop, (0, 0), (crop_w, crop_h), bgr, -1)
+                                    cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                                    cv2.rectangle(left_crop, (0, 0), (crop_w, crop_h), bgr, 2)
 
-                # Create mask to get ONLY the fill of the segment/box
-                mask = np.zeros((h, w), dtype=np.uint8)
-                if is_segment:
-                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                    if len(pts_px) >= 3:
-                        cv2.fillPoly(mask, [pts_px], 255)
-                else:
-                    cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
+                                mask = np.zeros((h, w), dtype=np.uint8)
+                                if is_segment:
+                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                    if len(pts_px) >= 3:
+                                        cv2.fillPoly(mask, [pts_px], 255)
+                                else:
+                                    cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
 
-                masked_img = cv2.bitwise_and(img, img, mask=mask)
-                right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
+                                masked_img = cv2.bitwise_and(img, img, mask=mask)
+                                right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
 
-                # Resize to standard width W_half (320)
-                W_half = 320
-                h_row = int(crop_h * (W_half / crop_w))
-                if h_row <= 0:
-                    h_row = 1
+                                # Horizontal concatenation at full resolution (no resize)
+                                row_img = np.hstack([left_crop, right_crop])
+                                cv2.line(row_img, (crop_w, 0), (crop_w, crop_h), (80, 80, 80), 2)
 
-                left_resized = cv2.resize(left_crop, (W_half, h_row))
-                right_resized = cv2.resize(right_crop, (W_half, h_row))
+                                _, crop_buf = cv2.imencode(".jpg", row_img)
+                                crop_b64 = base64.b64encode(crop_buf).decode("utf-8")
+                                detection_crops_b64.append(crop_b64)
 
-                # Horizontal concatenation (bbox crop + segment fill crop)
-                row_img = np.hstack([left_resized, right_resized])
-                # Draw vertical divider line
-                cv2.line(row_img, (W_half, 0), (W_half, h_row), (80, 80, 80), 2)
+                            # Encode overall image at its ORIGINAL resolution (No Resize)
+                            _, top_buf = cv2.imencode(".jpg", annotated_img)
+                            overall_b64 = base64.b64encode(top_buf).decode("utf-8")
 
-                # Encode this detection pair image to base64
-                _, crop_buf = cv2.imencode(".jpg", row_img)
-                crop_b64 = base64.b64encode(crop_buf).decode("utf-8")
-                detection_crops_b64.append(crop_b64)
+                            with cache_lock:
+                                previews[p_node_id] = [overall_b64] + detection_crops_b64
 
-            # Build overall detection image
-            W = 640
-            h_top = int(h * (W / w))
-            if h_top <= 0:
-                h_top = 1
-            top_img = cv2.resize(annotated_img, (W, h_top))
+                            event_queue.put({"type": "end", "node_id": p_node_id})
+                            event_queue.put({
+                                "type": "preview",
+                                "node_id": p_node_id,
+                                "preview": previews[p_node_id],
+                                "logs": ""
+                            })
+                        except Exception as ex:
+                            event_queue.put({"type": "end", "node_id": p_node_id})
+                            event_queue.put({"type": "error", "message": f"Preview node error: {str(ex)}"})
 
-            _, top_buf = cv2.imencode(".jpg", top_img)
-            overall_b64 = base64.b64encode(top_buf).decode("utf-8")
+                    elif n["type"] == "overlap_comparator":
+                        # Resolve inputs
+                        img_source = connections_to.get((p_node_id, "image"))
+                        class_source = connections_to.get((p_node_id, "class"))
 
-            # Store overall image + list of detection pair images
-            previews[p_node_id] = [overall_b64] + detection_crops_b64
+                        if not img_source:
+                            event_queue.put({"type": "error", "message": "Overlap Comparator node is missing connected 'Image' input"})
+                            return
 
-    # If no Preview nodes found, evaluate the YOLO or SAM3 node directly so we get its outputs
-    if not preview_nodes_found:
-        for n in payload.nodes:
-            if n["type"] in ("yolo_detector", "sam3"):
-                evaluate(n["id"], "image")
+                        event_queue.put({"type": "start", "node_id": p_node_id})
 
-    # Find the active input node to return filename
-    active_filename = "N/A"
-    for n in payload.nodes:
-        if n["type"] in ("single_image", "folder"):
-            img_src = (n["id"], "image")
-            if img_src in eval_cache:
-                active_filename = os.path.basename(eval_cache[img_src])
-                break
+                        try:
+                            src_image_path = evaluate(img_source[0], img_source[1])
+                            
+                            src_classes = []
+                            if class_source:
+                                src_classes = evaluate(class_source[0], class_source[1])
 
-    return {
-        "success": True,
-        "filename": active_filename,
-        "previews": previews,
-        "logs": logs,
-        "is_folder_mode": is_folder_mode,
-        "current_index": current_index,
-        "total_images": total_images
-    }
+                            input_pins = n["properties"].get("input_pins", ["image", "annotation1", "annotation2"])
+                            annotation_inputs = []
+                            for pin_name in input_pins:
+                                if pin_name.startswith("annotation"):
+                                    anno_src = connections_to.get((p_node_id, pin_name))
+                                    pin_idx_str = pin_name.replace("annotation", "")
+                                    pin_label = f"Annotation {pin_idx_str}"
+                                    if anno_src:
+                                        annos = evaluate(anno_src[0], anno_src[1])
+                                        annotation_inputs.append((pin_label, annos))
+
+                            img = cv2.imread(src_image_path)
+                            if img is None:
+                                event_queue.put({"type": "end", "node_id": p_node_id})
+                                event_queue.put({"type": "error", "message": f"Failed to load image '{src_image_path}' for Overlap Comparator rendering"})
+                                return
+                            
+                            h, w = img.shape[:2]
+                            preview_items = []
+
+                            # --- 1. RAW SECTION ---
+                            for pin_label, annos in annotation_inputs:
+                                raw_annotated = img.copy()
+                                for anno in annos:
+                                    class_id = anno["class_id"]
+                                    coords = anno["coords"]
+                                    is_segment = anno.get("is_segment", len(coords) > 4)
+                                    
+                                    target_name = f"Class {class_id}"
+                                    target_color = "#10b981"
+                                    if class_id < len(src_classes):
+                                        target_name = src_classes[class_id]["name"]
+                                        target_color = src_classes[class_id]["color"]
+                                    bgr = hex_to_bgr(target_color)
+
+                                    lbl_x, lbl_y = 0, 0
+                                    if is_segment:
+                                        pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                        if len(pts_px) >= 3:
+                                            overlay = raw_annotated.copy()
+                                            cv2.fillPoly(overlay, [pts_px], bgr)
+                                            cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
+                                            cv2.polylines(raw_annotated, [pts_px], True, bgr, 2)
+                                            min_y_idx = np.argmin(pts_px[:, 1])
+                                            lbl_x, lbl_y = int(pts_px[min_y_idx][0]), int(pts_px[min_y_idx][1])
+                                    else:
+                                        if len(coords) >= 4:
+                                            xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                                            x1 = int((xc - bw/2) * w)
+                                            y1 = int((yc - bh/2) * h)
+                                            x2 = int((xc + bw/2) * w)
+                                            y2 = int((yc + bh/2) * h)
+                                            overlay = raw_annotated.copy()
+                                            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                                            cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
+                                            cv2.rectangle(raw_annotated, (x1, y1), (x2, y2), bgr, 2)
+                                            lbl_x, lbl_y = x1, y1
+
+                                    if class_source:
+                                        conf = anno.get("confidence")
+                                        lbl_txt = target_name
+                                        if conf is not None:
+                                            lbl_txt += f" {conf:.2f}"
+                                        (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                                        cv2.rectangle(raw_annotated, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                                        cv2.putText(raw_annotated, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+                                
+                                _, raw_buf = cv2.imencode(".jpg", raw_annotated)
+                                raw_b64 = base64.b64encode(raw_buf).decode("utf-8")
+                                preview_items.append({
+                                    "label": f"RAW: {pin_label}",
+                                    "image": raw_b64
+                                })
+
+                            # --- 2. COMPARE ALL PAIRS ACROSS DIFFERENT SOURCES ---
+                            threshold = float(n["properties"].get("iou_threshold", 0.5))
+                            tagged_sources = []
+                            for src_idx, (pin_label, annos) in enumerate(annotation_inputs):
+                                tagged_annos = []
+                                for idx, anno in enumerate(annos):
+                                    tagged_annos.append({
+                                        "src_idx": src_idx,
+                                        "pin_label": pin_label,
+                                        "anno_idx": idx,
+                                        "anno": anno,
+                                        "matched_with": []
+                                    })
+                                tagged_sources.append(tagged_annos)
+
+                            num_sources = len(tagged_sources)
+                            for i in range(num_sources):
+                                for j in range(i + 1, num_sources):
+                                    for detA in tagged_sources[i]:
+                                        for detB in tagged_sources[j]:
+                                            iou = calculate_iou(detA["anno"], detB["anno"], h, w)
+                                            if iou >= threshold:
+                                                detA["matched_with"].append((j, detB["anno_idx"], iou))
+                                                detB["matched_with"].append((i, detA["anno_idx"], iou))
+
+                            # --- OVERLAP CROP GENERATION ---
+                            rendered_pairs = set()
+
+                            def get_detection_bbox_and_segment_crops(anno, color_hex):
+                                coords = anno["coords"]
+                                is_segment = anno.get("is_segment", len(coords) > 4)
+                                if is_segment:
+                                    xs = coords[0::2]
+                                    ys = coords[1::2]
+                                    cx1, cy1 = int(min(xs)*w), int(min(ys)*h)
+                                    cx2, cy2 = int(max(xs)*w), int(max(ys)*h)
+                                else:
+                                    if len(coords) >= 4:
+                                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                                        cx1 = int((xc - bw/2)*w)
+                                        cy1 = int((yc - bh/2)*h)
+                                        cx2 = int((xc + bw/2)*w)
+                                        cy2 = int((yc + bh/2)*h)
+                                    else:
+                                        return None, None
+                                
+                                cx1 = max(0, min(cx1, w - 1))
+                                cx2 = max(0, min(cx2, w - 1))
+                                cy1 = max(0, min(cy1, h - 1))
+                                cy2 = max(0, min(cy2, h - 1))
+                                
+                                cw = cx2 - cx1
+                                ch = cy2 - cy1
+                                if cw <= 0 or ch <= 0:
+                                    return None, None
+                                
+                                bgr = hex_to_bgr(color_hex)
+                                left_crop = img[cy1:cy2, cx1:cx2].copy()
+                                if is_segment:
+                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                    pts_offset = pts_px - [cx1, cy1]
+                                    if len(pts_offset) >= 3:
+                                        overlay_crop = left_crop.copy()
+                                        cv2.fillPoly(overlay_crop, [pts_offset], bgr)
+                                        cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                                        cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
+                                else:
+                                    overlay_crop = left_crop.copy()
+                                    cv2.rectangle(overlay_crop, (0, 0), (cw, ch), bgr, -1)
+                                    cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                                    cv2.rectangle(left_crop, (0, 0), (cw, ch), bgr, 2)
+                                    
+                                mask = np.zeros((h, w), dtype=np.uint8)
+                                if is_segment:
+                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                                    if len(pts_px) >= 3:
+                                        cv2.fillPoly(mask, [pts_px], 255)
+                                else:
+                                    cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
+                                    
+                                masked_img = cv2.bitwise_and(img, img, mask=mask)
+                                right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
+                                return left_crop, right_crop
+
+                            for i in range(num_sources):
+                                for detA in tagged_sources[i]:
+                                    for j, anno_idx_B, iou in detA["matched_with"]:
+                                        pair_key = (min(i, j), min(detA["anno_idx"], anno_idx_B), max(i, j), max(detA["anno_idx"], anno_idx_B))
+                                        if pair_key not in rendered_pairs:
+                                            rendered_pairs.add(pair_key)
+                                            detB = tagged_sources[j][anno_idx_B]
+                                            
+                                            c_id_A = detA["anno"]["class_id"]
+                                            color_A = "#10b981"
+                                            if c_id_A < len(src_classes):
+                                                color_A = src_classes[c_id_A]["color"]
+                                                
+                                            c_id_B = detB["anno"]["class_id"]
+                                            color_B = "#3b82f6"
+                                            if c_id_B < len(src_classes):
+                                                color_B = src_classes[c_id_B]["color"]
+                                            
+                                            cropA_bbox, cropA_seg = get_detection_bbox_and_segment_crops(detA["anno"], color_A)
+                                            cropB_bbox, cropB_seg = get_detection_bbox_and_segment_crops(detB["anno"], color_B)
+                                            
+                                            if cropA_bbox is not None and cropB_bbox is not None:
+                                                hA, wA = cropA_bbox.shape[:2]
+                                                hB, wB = cropB_bbox.shape[:2]
+                                                max_h = max(hA, hB)
+                                                
+                                                padA = np.zeros((max_h, wA, 3), dtype=np.uint8)
+                                                padA[0:hA, 0:wA] = cropA_bbox
+                                                padB = np.zeros((max_h, wB, 3), dtype=np.uint8)
+                                                padB[0:hB, 0:wB] = cropB_bbox
+                                                
+                                                overlap_bbox_row = np.hstack([padA, padB])
+                                                cv2.line(overlap_bbox_row, (wA, 0), (wA, max_h), (80, 80, 80), 2)
+                                                
+                                                _, ob_buf = cv2.imencode(".jpg", overlap_bbox_row)
+                                                ob_b64 = base64.b64encode(ob_buf).decode("utf-8")
+                                                
+                                                padA_seg = np.zeros((max_h, wA, 3), dtype=np.uint8)
+                                                padA_seg[0:hA, 0:wA] = cropA_seg
+                                                padB_seg = np.zeros((max_h, wB, 3), dtype=np.uint8)
+                                                padB_seg[0:hB, 0:wB] = cropB_seg
+                                                
+                                                overlap_seg_row = np.hstack([padA_seg, padB_seg])
+                                                cv2.line(overlap_seg_row, (wA, 0), (wA, max_h), (80, 80, 80), 2)
+                                                
+                                                _, os_buf = cv2.imencode(".jpg", overlap_seg_row)
+                                                os_b64 = base64.b64encode(os_buf).decode("utf-8")
+                                                
+                                                preview_items.append({
+                                                    "label": f"Overlap: {detA['pin_label']} (BBox) | {detB['pin_label']} (BBox) [IoU: {iou*100:.1f}%]",
+                                                    "image": ob_b64
+                                                })
+                                                preview_items.append({
+                                                    "label": f"Overlap: {detA['pin_label']} (Segment) | {detB['pin_label']} (Segment) [IoU: {iou*100:.1f}%]",
+                                                    "image": os_b64
+                                                })
+
+                            # --- 3. NOT OVERLAP SECTION ---
+                            for i in range(num_sources):
+                                for det in tagged_sources[i]:
+                                    if len(det["matched_with"]) == 0:
+                                        c_id = det["anno"]["class_id"]
+                                        color = "#10b981"
+                                        if c_id < len(src_classes):
+                                            color = src_classes[c_id]["color"]
+                                            
+                                        crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], color)
+                                        
+                                        if crop_bbox is not None and crop_seg is not None:
+                                            row_img = np.hstack([crop_bbox, crop_seg])
+                                            h_row, w_row = row_img.shape[:2]
+                                            cv2.line(row_img, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
+                                            
+                                            _, no_buf = cv2.imencode(".jpg", row_img)
+                                            no_b64 = base64.b64encode(no_buf).decode("utf-8")
+                                            
+                                            preview_items.append({
+                                                "label": f"Not Overlap: From {det['pin_label']} (BBox | Segment)",
+                                                "image": no_b64
+                                            })
+
+                            with cache_lock:
+                                previews[p_node_id] = preview_items
+
+                            event_queue.put({"type": "end", "node_id": p_node_id})
+                            event_queue.put({
+                                "type": "preview",
+                                "node_id": p_node_id,
+                                "preview": previews[p_node_id],
+                                "logs": ""
+                            })
+                        except Exception as ex:
+                            event_queue.put({"type": "end", "node_id": p_node_id})
+                            event_queue.put({"type": "error", "message": f"Overlap Comparator node error: {str(ex)}"})
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(preview_nodes)) as executor:
+                    executor.map(process_preview, preview_nodes)
+            else:
+                # Spawning evaluations for YOLO or SAM3 directly
+                direct_nodes = [n for n in payload.nodes if n["type"] in ("yolo_detector", "sam3")]
+                if direct_nodes:
+                    def process_direct(n):
+                        try:
+                            evaluate(n["id"], "image")
+                        except Exception as ex:
+                            event_queue.put({"type": "error", "message": f"Detector node error: {str(ex)}"})
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(direct_nodes)) as executor:
+                        executor.map(process_direct, direct_nodes)
+
+            # Find the active input node to return filename
+            active_filename = "N/A"
+            for n in payload.nodes:
+                if n["type"] in ("single_image", "folder"):
+                    img_src = (n["id"], "image")
+                    with cache_lock:
+                        if img_src in eval_cache:
+                            active_filename = os.path.basename(eval_cache[img_src])
+                            break
+
+            event_queue.put({
+                "type": "done",
+                "filename": active_filename,
+                "is_folder_mode": is_folder_mode,
+                "current_index": current_index,
+                "total_images": total_images
+            })
+        except Exception as e:
+            for n_id in nodes.keys():
+                event_queue.put({"type": "end", "node_id": n_id})
+            event_queue.put({"type": "error", "message": str(e)})
+
+    # Start target in a background thread
+    t = threading.Thread(target=run_all)
+    t.start()
+
+    def stream_generator():
+        # Keep yielding events until the thread completes and the queue is empty
+        while t.is_alive() or not event_queue.empty():
+            try:
+                ev = event_queue.get(timeout=0.1)
+                yield json.dumps(ev) + "\n"
+            except queue.Empty:
+                continue
+
+    return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
 
 if __name__ == "__main__":
     uvicorn.run("annodes:app", host="127.0.0.1", port=args.port, reload=True)

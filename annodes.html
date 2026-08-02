@@ -233,6 +233,29 @@
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--accent), 0 0 15px var(--accent-glow);
     }
     
+    /* Glow for nodes that are currently processing */
+    .node.processing-glow {
+      border-color: #3b82f6 !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 2px #3b82f6, 0 0 25px rgba(59, 130, 246, 0.5);
+      animation: processing-pulse 1.5s infinite alternate;
+    }
+    
+    @keyframes processing-pulse {
+      0% {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(59, 130, 246, 0.3), 0 0 15px rgba(59, 130, 246, 0.3);
+      }
+      100% {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(59, 130, 246, 0.7), 0 0 30px rgba(59, 130, 246, 0.7);
+      }
+    }
+
+    /* Glow for preview node receiving input */
+    .node.preview-pulse-glow {
+      border-color: #a855f7 !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 3px #a855f7, 0 0 35px rgba(168, 85, 247, 0.8);
+      transition: all 0.2s ease;
+    }
+    
     .node-header {
       padding: 10px 14px;
       background: rgba(255,255,255,0.03);
@@ -373,7 +396,7 @@
     }
     
     /* Resizable Nodes and Preview Boxes */
-    .node.yolo_detector, .node.sam3, .node.preview {
+    .node.yolo_detector, .node.sam3, .node.preview, .node.overlap_comparator {
       width: fit-content !important;
       min-width: 320px;
     }
@@ -614,6 +637,12 @@
               <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12A8,8 0 0,0 12,4M12,6L14.12,10.5L19,11.13L15.5,14.5L16.24,19.37L12,17.12L7.76,19.37L8.5,14.5L5,11.13L9.88,10.5L12,6Z"/>
             </svg>
             SAM3 Detector
+          </div>
+          <div class="node-template-btn" data-type="overlap_comparator">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6Z"/>
+            </svg>
+            Overlap Comparator
           </div>
         </div>
       </div>
