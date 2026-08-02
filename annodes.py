@@ -155,6 +155,19 @@ init_db()
 # --- Serve Frontend Files ---
 @app.get("/")
 def read_root():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM canvas_tabs ORDER BY id ASC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            first_id = row[0]
+            cursor.execute("UPDATE canvas_tabs SET is_active = 0")
+            cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (first_id,))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        pass
     return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
 @app.get("/{flow_id}")
