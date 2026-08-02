@@ -28,6 +28,219 @@
   let _startPanX = 0;
   let _startPanY = 0;
 
+  function adjustZoom(zoomIn) {
+    const wrapRect = canvasWrap.getBoundingClientRect();
+    const centerX = wrapRect.width / 2;
+    const centerY = wrapRect.height / 2;
+
+    const canvasX = (centerX - _panX) / _zoom;
+    const canvasY = (centerY - _panY) / _zoom;
+
+    if (zoomIn) {
+      _zoom = Math.min(_zoom * 1.15, 2.5);
+    } else {
+      _zoom = Math.max(_zoom / 1.15, 0.15);
+    }
+
+    _panX = centerX - canvasX * _zoom;
+    _panY = centerY - canvasY * _zoom;
+
+    canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
+    localStorage.setItem('annodes_pan_x', _panX);
+    localStorage.setItem('annodes_pan_y', _panY);
+    localStorage.setItem('annodes_zoom', _zoom);
+
+    renderConnections();
+  }
+
+  function resetZoom() {
+    _zoom = 1.0;
+    _panX = 0;
+    _panY = 0;
+    canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
+    localStorage.setItem('annodes_pan_x', _panX);
+    localStorage.setItem('annodes_pan_y', _panY);
+    localStorage.setItem('annodes_zoom', _zoom);
+    renderConnections();
+  }
+
+  // --- Tab Management ---
+  let _tabs = [];
+  let _activeTabId = null;
+  let activeDropdown = null;
+
+  async function loadTabs() {
+    try {
+      const r = await fetch('/api/tabs');
+      if (r.ok) {
+        _tabs = await r.json();
+        const active = _tabs.find(t => t.is_active);
+        _activeTabId = active ? active.id : null;
+        renderTabs();
+      }
+    } catch (err) {
+      console.error("Failed to load tabs", err);
+    }
+  }
+
+  function renderTabs() {
+    const container = document.getElementById('tabs-container');
+    if (!container) return;
+    container.innerHTML = '';
+
+    _tabs.forEach(tab => {
+      const tabEl = document.createElement('div');
+      tabEl.className = `tab ${tab.id === _activeTabId ? 'active' : ''}`;
+      
+      const tabName = document.createElement('span');
+      tabName.textContent = tab.name;
+      tabEl.appendChild(tabName);
+
+      const optBtn = document.createElement('button');
+      optBtn.className = 'tab-options-btn';
+      optBtn.textContent = '⋮';
+      optBtn.title = 'Tab Options';
+      optBtn.onclick = (e) => {
+        e.stopPropagation();
+        showTabDropdown(e, tab);
+      };
+      tabEl.appendChild(optBtn);
+
+      tabEl.onclick = () => {
+        if (tab.id !== _activeTabId) {
+          selectTab(tab.id);
+        }
+      };
+
+      container.appendChild(tabEl);
+    });
+  }
+
+  async function selectTab(tabId) {
+    try {
+      const r = await fetch('/api/tabs/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tabId })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        _activeTabId = data.tab_id;
+        
+        nodesContainer.innerHTML = '';
+        _nodes = data.nodes || [];
+        _connections = data.connections || [];
+        _nodes.forEach(n => renderNodeDOM(n));
+        renderConnections();
+
+        await loadTabs();
+        showToast(`Loaded flow: ${data.tab_name}`, 'success');
+      }
+    } catch (err) {
+      showToast('Gagal memuat flow.', 'error');
+    }
+  }
+
+  async function createTab(name) {
+    try {
+      const r = await fetch('/api/tabs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (r.ok) {
+        const res = await r.json();
+        await selectTab(res.id);
+        showToast(`Tab '${name}' berhasil dibuat!`, 'success');
+      }
+    } catch (err) {
+      showToast('Gagal membuat tab baru.', 'error');
+    }
+  }
+
+  async function renameTab(tabId, oldName) {
+    const newName = prompt('Ubah nama flow:', oldName);
+    if (!newName || newName.trim() === '') return;
+    try {
+      const r = await fetch('/api/tabs/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tabId, name: newName.trim() })
+      });
+      if (r.ok) {
+        await loadTabs();
+        showToast('Nama flow berhasil diubah.', 'success');
+      }
+    } catch (err) {
+      showToast('Gagal mengubah nama flow.', 'error');
+    }
+  }
+
+  async function deleteTab(tabId, name) {
+    if (!confirm(`Apakah Anda yakin ingin menghapus flow '${name}'?`)) return;
+    try {
+      const r = await fetch('/api/tabs/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: tabId })
+      });
+      if (r.ok) {
+        await loadCanvas();
+        await loadTabs();
+        showToast('Flow berhasil dihapus.', 'success');
+      }
+    } catch (err) {
+      showToast('Gagal menghapus flow.', 'error');
+    }
+  }
+
+  function showTabDropdown(e, tab) {
+    closeTabDropdown();
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'tab-dropdown';
+    
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'tab-dropdown-item';
+    renameBtn.textContent = 'Rename';
+    renameBtn.onclick = (event) => {
+      event.stopPropagation();
+      closeTabDropdown();
+      renameTab(tab.id, tab.name);
+    };
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'tab-dropdown-item delete';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.onclick = (event) => {
+      event.stopPropagation();
+      closeTabDropdown();
+      deleteTab(tab.id, tab.name);
+    };
+
+    dropdown.appendChild(renameBtn);
+    dropdown.appendChild(deleteBtn);
+
+    const rect = e.target.getBoundingClientRect();
+    dropdown.style.left = (rect.left + window.scrollX) + 'px';
+    dropdown.style.top = (rect.bottom + window.scrollY) + 'px';
+
+    document.body.appendChild(dropdown);
+    activeDropdown = dropdown;
+
+    setTimeout(() => {
+      window.addEventListener('click', closeTabDropdown);
+    }, 0);
+  }
+
+  function closeTabDropdown() {
+    if (activeDropdown) {
+      activeDropdown.remove();
+      activeDropdown = null;
+    }
+    window.removeEventListener('click', closeTabDropdown);
+  }
+
   // --- Initializer ---
   async function init() {
     // Register sidebar template triggers
@@ -45,11 +258,29 @@
     // Load saved canvas layout
     await loadCanvas();
 
+    // Load tabs list
+    await loadTabs();
+
+    // Bind add-tab-btn click
+    const addTabBtn = document.getElementById('add-tab-btn');
+    if (addTabBtn) {
+      addTabBtn.onclick = () => {
+        const name = prompt('Masukkan nama flow baru:', `Flow ${_tabs.length + 1}`);
+        if (name && name.trim() !== '') {
+          createTab(name.trim());
+        }
+      };
+    }
+
     // Restore pan & zoom state
     _panX = parseFloat(localStorage.getItem('annodes_pan_x')) || 0;
     _panY = parseFloat(localStorage.getItem('annodes_pan_y')) || 0;
     _zoom = parseFloat(localStorage.getItem('annodes_zoom')) || 1.0;
     canvasContent.style.transform = `translate(${_panX}px, ${_panY}px) scale(${_zoom})`;
+
+    document.getElementById('zoom-in-btn').onclick = () => adjustZoom(true);
+    document.getElementById('zoom-out-btn').onclick = () => adjustZoom(false);
+    document.getElementById('zoom-reset-btn').onclick = () => resetZoom();
 
     // Mouse down listener for panning
     canvasWrap.onmousedown = (e) => {
@@ -354,17 +585,39 @@
       const itemWrapper = document.createElement('div');
       itemWrapper.style.cssText = 'width: 100%; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 4px; background: rgba(255,255,255,0.02);';
 
+      let labelBg = 'rgba(168, 85, 247, 0.15)';
+      let labelColor = '#c084fc';
+
+      const category = (typeof item === 'object' && item !== null) ? item.category : null;
+      if (category === 'raw') {
+        labelBg = 'rgba(59, 130, 246, 0.15)';
+        labelColor = '#60a5fa';
+      } else if (category === 'overlap') {
+        labelBg = 'rgba(239, 68, 68, 0.15)';
+        labelColor = '#f87171';
+      } else if (category === 'not_overlap') {
+        labelBg = 'rgba(234, 179, 8, 0.15)';
+        labelColor = '#facc15';
+      }
+
+      let showLabel = true;
       const label = document.createElement('span');
-      label.style.cssText = 'font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; width: fit-content;';
+      label.style.cssText = `font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; background: ${labelBg}; color: ${labelColor}; width: fit-content;`;
       
-      if (customLabel) {
-        label.textContent = customLabel;
+      if (customLabel !== null && customLabel !== undefined) {
+        if (customLabel === '') {
+          showLabel = false;
+        } else {
+          label.textContent = customLabel;
+        }
       } else if (items.length > 1) {
         label.textContent = idx === 0 ? '1. Overall Detection Segment' : `2. Detection #${idx} (BBox Crop | Segment Crop)`;
       } else {
         label.textContent = 'Preview Output';
       }
-      itemWrapper.appendChild(label);
+      if (showLabel) {
+        itemWrapper.appendChild(label);
+      }
 
       const img = document.createElement('img');
       img.className = 'preview-img';
@@ -375,6 +628,34 @@
       itemWrapper.appendChild(img);
       previewContainer.appendChild(itemWrapper);
     });
+  }
+
+  function runFlowFromInputNode(inputId) {
+    const downstream = new Set();
+    downstream.add(inputId);
+    
+    let added = true;
+    while (added) {
+      added = false;
+      _connections.forEach(conn => {
+        if (downstream.has(conn.fromNodeId) && !downstream.has(conn.toNodeId)) {
+          downstream.add(conn.toNodeId);
+          added = true;
+        }
+      });
+    }
+
+    const targets = Array.from(downstream).filter(id => {
+      const node = _nodes.find(n => n.id === id);
+      return node && (node.type === 'preview' || node.type === 'overlap_comparator');
+    });
+
+    if (targets.length === 0) {
+      showToast('Tidak ada node Preview/Overlap Comparator yang terhubung di bawah input ini!', 'warning');
+      return;
+    }
+
+    window.runFlow(Array.from(downstream));
   }
 
   function renderNodeDOM(node) {
@@ -403,13 +684,33 @@
     title.className = 'node-header-title';
     title.textContent = node.type.toUpperCase().replace('_', ' ');
 
+    const rightControls = document.createElement('div');
+    rightControls.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+    if (node.type === 'single_image' || node.type === 'folder') {
+      const runBtn = document.createElement('button');
+      runBtn.textContent = '▶ Run';
+      runBtn.title = 'Jalankan flow dari input ini';
+      runBtn.style.cssText = 'border: none; background: #10b981; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; line-height: 1;';
+      runBtn.onmouseover = () => { runBtn.style.background = '#059669'; };
+      runBtn.onmouseout = () => { runBtn.style.background = '#10b981'; };
+      runBtn.onmousedown = () => { runBtn.style.transform = 'scale(0.95)'; };
+      runBtn.onmouseup = () => { runBtn.style.transform = 'scale(1)'; };
+      runBtn.onclick = (e) => {
+        e.stopPropagation();
+        runFlowFromInputNode(node.id);
+      };
+      rightControls.appendChild(runBtn);
+    }
+
     const closeBtn = document.createElement('button');
     closeBtn.className = 'node-close-btn';
     closeBtn.textContent = '✕';
     closeBtn.title = 'Hapus Node';
     closeBtn.onclick = (e) => { e.stopPropagation(); deleteNode(node.id); };
 
-    header.append(title, closeBtn);
+    rightControls.appendChild(closeBtn);
+    header.append(title, rightControls);
 
     // Node Body
     const body = document.createElement('div');
@@ -825,10 +1126,16 @@
       body.appendChild(previewContainer);
       setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
     } else if (node.type === 'overlap_comparator') {
-      const inputPins = node.properties.input_pins || ['image', 'annotation1', 'annotation2'];
+      const inputPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
+      if (!inputPins.includes('class')) {
+        const idx = inputPins.indexOf('image');
+        inputPins.splice(idx !== -1 ? idx + 1 : 1, 0, 'class');
+        node.properties.input_pins = inputPins;
+      }
       const pins_in = inputPins.map(name => {
-        let label = name === 'image' ? 'Image' : `Annotation ${name.replace('annotation', '')}`;
-        return { name, label };
+        let label = name === 'image' ? 'Image' : (name === 'class' ? 'Class' : `Annotation ${name.replace('annotation', '')}`);
+        let optional = name === 'class';
+        return { name, label, optional };
       });
       const pins = createPinsLayout(node, pins_in, []);
       body.appendChild(pins);
@@ -859,7 +1166,7 @@
       addInputBtn.textContent = '+ Add Annotation Input';
       addInputBtn.style.cssText = 'width: 100%; font-size: 0.72rem; padding: 4px 8px; margin-top: 4px;';
       addInputBtn.onclick = () => {
-        const currentPins = node.properties.input_pins || ['image', 'annotation1', 'annotation2'];
+        const currentPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
         let maxNum = 0;
         currentPins.forEach(p => {
           if (p.startsWith('annotation')) {
@@ -1471,7 +1778,7 @@
   }
 
   // --- Execute Flow (Run Flow) ---
-  window.runFlow = async function () {
+  window.runFlow = async function (runOnlyNodes = null) {
     showToast('Menjalankan flow auto-annotation...', 'info');
     
     // Auto save layout before execution
@@ -1483,13 +1790,18 @@
     });
 
     try {
+      const payload = {
+        nodes: _nodes,
+        connections: _connections
+      };
+      if (runOnlyNodes) {
+        payload.run_only_nodes = runOnlyNodes;
+      }
+
       const r = await fetch('/api/run-flow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nodes: _nodes,
-          connections: _connections
-        })
+        body: JSON.stringify(payload)
       });
       
       if (!r.ok) {

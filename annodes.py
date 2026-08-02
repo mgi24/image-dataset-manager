@@ -84,9 +84,23 @@ class CanvasSaveRequest(BaseModel):
     nodes: str
     connections: str
 
+class CreateTabRequest(BaseModel):
+    name: str
+
+class SelectTabRequest(BaseModel):
+    id: int
+
+class RenameTabRequest(BaseModel):
+    id: int
+    name: str
+
+class DeleteTabRequest(BaseModel):
+    id: int
+
 class RunFlowRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     connections: List[Dict[str, Any]]
+    run_only_nodes: Optional[List[str]] = None
 
 # Database setup
 def init_db():
@@ -100,6 +114,15 @@ def init_db():
         );
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS canvas_tabs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            nodes TEXT NOT NULL,
+            connections TEXT NOT NULL,
+            is_active INTEGER DEFAULT 0
+        );
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS flow_state (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             current_index INTEGER DEFAULT 0
@@ -109,6 +132,20 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM flow_state")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO flow_state (current_index) VALUES (0)")
+        
+    # Migrate to canvas_tabs if empty
+    cursor.execute("SELECT COUNT(*) FROM canvas_tabs")
+    if cursor.fetchone()[0] == 0:
+        try:
+            cursor.execute("SELECT nodes, connections FROM canvas LIMIT 1")
+            old_row = cursor.fetchone()
+            if old_row:
+                cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, ?, ?, 1)", ("Flow 1", old_row[0], old_row[1]))
+            else:
+                cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, ?, ?, 1)", ("Flow 1", "[]", "[]"))
+        except Exception:
+            cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, ?, ?, 1)", ("Flow 1", "[]", "[]"))
+            
     conn.commit()
     conn.close()
 
@@ -119,55 +156,36 @@ init_db()
 def read_root():
     return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
-@app.get("/annodes.html")
-def read_html():
-    return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
-
 @app.get("/annodes.js")
 def read_js():
     return FileResponse(os.path.join(BASE_DIR, "annodes.js"))
 
-@app.get("/index.css")
-def read_css():
-    return FileResponse(os.path.join(BASE_DIR, "legacy", "index.css"))
+@app.get("/api/models")
+def get_models():
+    if not os.path.exists(MODEL_DIR):
+        return []
+    models = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
+    return sorted(models)
 
-# --- API Endpoints ---
 @app.get("/api/gpus")
-def list_gpus():
+def get_gpus():
+    # Return available torch devices
+    devices = ["cpu"]
     try:
         import torch
-        gpus = []
         if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                name = torch.cuda.get_device_name(i)
-                mem_total = torch.cuda.get_device_properties(i).total_memory // (1024 * 1024)
-                gpus.append({"id": f"cuda:{i}", "name": f"GPU {i}: {name} ({mem_total} MB)"})
-        # Always append CPU option
-        gpus.append({"id": "cpu", "name": "CPU"})
-        return {"success": True, "gpus": gpus}
-    except Exception as e:
-        return {"success": False, "gpus": [{"id": "cpu", "name": "CPU"}], "error": str(e)}
-
-@app.get("/api/models")
-def list_models():
-    try:
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        files = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
-        return {"success": True, "models": files}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+            devices.append("cuda")
+    except ImportError:
+        pass
+    return devices
 
 @app.get("/api/yolo-model-names")
 def get_yolo_model_names(model: str):
-    if not model.endswith(".pt"):
-        model_file = f"{model}.pt"
-    else:
-        model_file = model
-    model_path = os.path.join(MODEL_DIR, model_file)
+    model_path = os.path.join(MODEL_DIR, model)
     if not os.path.exists(model_path):
-        return {"success": False, "error": f"Model {model_file} not found in model/ folder"}
+        return {"success": False, "error": f"Model '{model}' not found"}
     try:
-        yolo = _get_yolo_model(model_file, model_path, device="cpu")
+        yolo = _get_yolo_model(model, model_path, device="cpu")
         names = [yolo.names[i] for i in sorted(yolo.names.keys())]
         return {"success": True, "names": names}
     except Exception as e:
@@ -178,8 +196,14 @@ def save_canvas(payload: CanvasSaveRequest):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM canvas")
-        cursor.execute("INSERT INTO canvas (nodes, connections) VALUES (?, ?)", (payload.nodes, payload.connections))
+        # Find active tab
+        cursor.execute("SELECT id FROM canvas_tabs WHERE is_active = 1 LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            active_id = row[0]
+            cursor.execute("UPDATE canvas_tabs SET nodes = ?, connections = ? WHERE id = ?", (payload.nodes, payload.connections, active_id))
+        else:
+            cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, ?, ?, 1)", ("Flow 1", payload.nodes, payload.connections))
         conn.commit()
         conn.close()
         return {"success": True}
@@ -191,12 +215,114 @@ def load_canvas():
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT nodes, connections FROM canvas LIMIT 1")
+        cursor.execute("SELECT id, name, nodes, connections FROM canvas_tabs WHERE is_active = 1 LIMIT 1")
         row = cursor.fetchone()
+        if not row:
+            cursor.execute("SELECT id, name, nodes, connections FROM canvas_tabs LIMIT 1")
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (row[0],))
+                conn.commit()
+            else:
+                cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, '[]', '[]', 1)", ("Flow 1",))
+                conn.commit()
+                cursor.execute("SELECT id, name, nodes, connections FROM canvas_tabs WHERE is_active = 1 LIMIT 1")
+                row = cursor.fetchone()
+        
+        conn.close()
+        return {
+            "success": True,
+            "tab_id": row[0],
+            "tab_name": row[1],
+            "nodes": json.loads(row[2]) if row[2] else [],
+            "connections": json.loads(row[3]) if row[3] else []
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tabs")
+def get_tabs():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, is_active FROM canvas_tabs ORDER BY id ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": r[0], "name": r[1], "is_active": bool(r[2])} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tabs/create")
+def create_tab(payload: CreateTabRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE canvas_tabs SET is_active = 0")
+        cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, '[]', '[]', 1)", (payload.name,))
+        new_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return {"success": True, "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tabs/select")
+def select_tab(payload: SelectTabRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE canvas_tabs SET is_active = 0")
+        cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (payload.id,))
+        cursor.execute("SELECT id, name, nodes, connections FROM canvas_tabs WHERE id = ?", (payload.id,))
+        row = cursor.fetchone()
+        conn.commit()
         conn.close()
         if row:
-            return {"success": True, "nodes": json.loads(row[0]), "connections": json.loads(row[1])}
-        return {"success": True, "nodes": [], "connections": []}
+            return {
+                "success": True,
+                "tab_id": row[0],
+                "tab_name": row[1],
+                "nodes": json.loads(row[2]) if row[2] else [],
+                "connections": json.loads(row[3]) if row[3] else []
+            }
+        raise HTTPException(status_code=404, detail="Tab not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tabs/rename")
+def rename_tab(payload: RenameTabRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE canvas_tabs SET name = ? WHERE id = ?", (payload.name, payload.id))
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tabs/delete")
+def delete_tab(payload: DeleteTabRequest):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT is_active FROM canvas_tabs WHERE id = ?", (payload.id,))
+        row = cursor.fetchone()
+        is_active_del = row[0] if row else 0
+        
+        cursor.execute("DELETE FROM canvas_tabs WHERE id = ?", (payload.id,))
+        
+        if is_active_del:
+            cursor.execute("SELECT id FROM canvas_tabs ORDER BY id ASC LIMIT 1")
+            other = cursor.fetchone()
+            if other:
+                cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (other[0],))
+            else:
+                cursor.execute("INSERT INTO canvas_tabs (name, nodes, connections, is_active) VALUES (?, '[]', '[]', 1)", ("Flow 1",))
+        
+        conn.commit()
+        conn.close()
+        return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -310,6 +436,8 @@ def run_flow(payload: RunFlowRequest):
     folder_node = None
     for n in payload.nodes:
         if n["type"] == "folder":
+            if payload.run_only_nodes is not None and n["id"] not in payload.run_only_nodes:
+                continue
             folder_node = n
             break
 
@@ -833,6 +961,8 @@ def run_flow(payload: RunFlowRequest):
     def run_all():
         try:
             preview_nodes = [n for n in payload.nodes if n["type"] in ("preview", "overlap_comparator")]
+            if payload.run_only_nodes is not None:
+                preview_nodes = [n for n in preview_nodes if n["id"] in payload.run_only_nodes]
             
             if preview_nodes:
                 def process_preview(n):
@@ -1017,7 +1147,7 @@ def run_flow(payload: RunFlowRequest):
                             if class_source:
                                 src_classes = evaluate(class_source[0], class_source[1])
 
-                            input_pins = n["properties"].get("input_pins", ["image", "annotation1", "annotation2"])
+                            input_pins = n["properties"].get("input_pins", ["image", "class", "annotation1", "annotation2"])
                             annotation_inputs = []
                             for pin_name in input_pins:
                                 if pin_name.startswith("annotation"):
@@ -1088,36 +1218,12 @@ def run_flow(payload: RunFlowRequest):
                                 raw_b64 = base64.b64encode(raw_buf).decode("utf-8")
                                 preview_items.append({
                                     "label": f"RAW: {pin_label}",
-                                    "image": raw_b64
+                                    "image": raw_b64,
+                                    "category": "raw"
                                 })
 
                             # --- 2. COMPARE ALL PAIRS ACROSS DIFFERENT SOURCES ---
                             threshold = float(n["properties"].get("iou_threshold", 0.5))
-                            tagged_sources = []
-                            for src_idx, (pin_label, annos) in enumerate(annotation_inputs):
-                                tagged_annos = []
-                                for idx, anno in enumerate(annos):
-                                    tagged_annos.append({
-                                        "src_idx": src_idx,
-                                        "pin_label": pin_label,
-                                        "anno_idx": idx,
-                                        "anno": anno,
-                                        "matched_with": []
-                                    })
-                                tagged_sources.append(tagged_annos)
-
-                            num_sources = len(tagged_sources)
-                            for i in range(num_sources):
-                                for j in range(i + 1, num_sources):
-                                    for detA in tagged_sources[i]:
-                                        for detB in tagged_sources[j]:
-                                            iou = calculate_iou(detA["anno"], detB["anno"], h, w)
-                                            if iou >= threshold:
-                                                detA["matched_with"].append((j, detB["anno_idx"], iou))
-                                                detB["matched_with"].append((i, detA["anno_idx"], iou))
-
-                            # --- OVERLAP CROP GENERATION ---
-                            rendered_pairs = set()
 
                             def get_detection_bbox_and_segment_crops(anno, color_hex):
                                 coords = anno["coords"]
@@ -1174,87 +1280,157 @@ def run_flow(payload: RunFlowRequest):
                                 masked_img = cv2.bitwise_and(img, img, mask=mask)
                                 right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
                                 return left_crop, right_crop
-
-                            for i in range(num_sources):
-                                for detA in tagged_sources[i]:
-                                    for j, anno_idx_B, iou in detA["matched_with"]:
-                                        pair_key = (min(i, j), min(detA["anno_idx"], anno_idx_B), max(i, j), max(detA["anno_idx"], anno_idx_B))
-                                        if pair_key not in rendered_pairs:
-                                            rendered_pairs.add(pair_key)
-                                            detB = tagged_sources[j][anno_idx_B]
-                                            
-                                            c_id_A = detA["anno"]["class_id"]
-                                            color_A = "#10b981"
-                                            if c_id_A < len(src_classes):
-                                                color_A = src_classes[c_id_A]["color"]
-                                                
-                                            c_id_B = detB["anno"]["class_id"]
-                                            color_B = "#3b82f6"
-                                            if c_id_B < len(src_classes):
-                                                color_B = src_classes[c_id_B]["color"]
-                                            
-                                            cropA_bbox, cropA_seg = get_detection_bbox_and_segment_crops(detA["anno"], color_A)
-                                            cropB_bbox, cropB_seg = get_detection_bbox_and_segment_crops(detB["anno"], color_B)
-                                            
-                                            if cropA_bbox is not None and cropB_bbox is not None:
-                                                hA, wA = cropA_bbox.shape[:2]
-                                                hB, wB = cropB_bbox.shape[:2]
-                                                max_h = max(hA, hB)
-                                                
-                                                padA = np.zeros((max_h, wA, 3), dtype=np.uint8)
-                                                padA[0:hA, 0:wA] = cropA_bbox
-                                                padB = np.zeros((max_h, wB, 3), dtype=np.uint8)
-                                                padB[0:hB, 0:wB] = cropB_bbox
-                                                
-                                                overlap_bbox_row = np.hstack([padA, padB])
-                                                cv2.line(overlap_bbox_row, (wA, 0), (wA, max_h), (80, 80, 80), 2)
-                                                
-                                                _, ob_buf = cv2.imencode(".jpg", overlap_bbox_row)
-                                                ob_b64 = base64.b64encode(ob_buf).decode("utf-8")
-                                                
-                                                padA_seg = np.zeros((max_h, wA, 3), dtype=np.uint8)
-                                                padA_seg[0:hA, 0:wA] = cropA_seg
-                                                padB_seg = np.zeros((max_h, wB, 3), dtype=np.uint8)
-                                                padB_seg[0:hB, 0:wB] = cropB_seg
-                                                
-                                                overlap_seg_row = np.hstack([padA_seg, padB_seg])
-                                                cv2.line(overlap_seg_row, (wA, 0), (wA, max_h), (80, 80, 80), 2)
-                                                
-                                                _, os_buf = cv2.imencode(".jpg", overlap_seg_row)
-                                                os_b64 = base64.b64encode(os_buf).decode("utf-8")
-                                                
-                                                preview_items.append({
-                                                    "label": f"Overlap: {detA['pin_label']} (BBox) | {detB['pin_label']} (BBox) [IoU: {iou*100:.1f}%]",
-                                                    "image": ob_b64
-                                                })
-                                                preview_items.append({
-                                                    "label": f"Overlap: {detA['pin_label']} (Segment) | {detB['pin_label']} (Segment) [IoU: {iou*100:.1f}%]",
-                                                    "image": os_b64
-                                                })
+                            
+                            # Collect all detections into a single flat list
+                            all_detections = []
+                            for src_idx, (pin_label, annos) in enumerate(annotation_inputs):
+                                for anno in annos:
+                                    all_detections.append({
+                                        "src_idx": src_idx,
+                                        "pin_label": pin_label,
+                                        "anno": anno,
+                                        "global_idx": len(all_detections)
+                                    })
+                                    
+                            # Build adjacency list of overlaps based on IoU threshold
+                            num_dets = len(all_detections)
+                            adj = [[] for _ in range(num_dets)]
+                            for i in range(num_dets):
+                                for j in range(i + 1, num_dets):
+                                    iou = calculate_iou(all_detections[i]["anno"], all_detections[j]["anno"], h, w)
+                                    if iou >= threshold:
+                                        adj[i].append(j)
+                                        adj[j].append(i)
+                                        
+                            # Find overlap clusters using BFS/Connected Components
+                            visited = set()
+                            clusters = []
+                            for i in range(num_dets):
+                                if i not in visited:
+                                    comp = []
+                                    queue = [i]
+                                    visited.add(i)
+                                    while queue:
+                                        curr = queue.pop(0)
+                                        comp.append(all_detections[curr])
+                                        for neighbor in adj[curr]:
+                                            if neighbor not in visited:
+                                                visited.add(neighbor)
+                                                queue.append(neighbor)
+                                    clusters.append(comp)
+                                    
+                            # Classify clusters into overlaps or non-overlaps
+                            overlap_clusters = []
+                            not_overlap_detections = []
+                            for comp in clusters:
+                                sources_in_comp = set(det["src_idx"] for det in comp)
+                                if len(comp) > 1 and len(sources_in_comp) > 1:
+                                    comp.sort(key=lambda d: (d["src_idx"], d["anno"]["class_id"]))
+                                    overlap_clusters.append(comp)
+                                else:
+                                    for det in comp:
+                                        not_overlap_detections.append(det)
+                                        
+                            # Render overlap cluster panels
+                            for comp in overlap_clusters:
+                                for det in comp:
+                                    c_id = det["anno"]["class_id"]
+                                    det["class_name"] = src_classes[c_id]["name"] if c_id < len(src_classes) else f"Class {c_id}"
+                                    det["color"] = src_classes[c_id]["color"] if c_id < len(src_classes) else "#10b981"
+                                    
+                                # Create cross-referenced IoU labels
+                                label_parts = []
+                                for idx_i, det_i in enumerate(comp):
+                                    part = f"{det_i['pin_label']} ({det_i['class_name']})"
+                                    ious = []
+                                    for idx_j, det_j in enumerate(comp):
+                                        if idx_i == idx_j:
+                                            continue
+                                        val = calculate_iou(det_i["anno"], det_j["anno"], h, w)
+                                        ious.append(f"{val*100:.0f}% w/ P{idx_j+1}")
+                                    if ious:
+                                        part += f" [{', '.join(ious)}]"
+                                    label_parts.append(part)
+                                label_text = "Overlap: " + " | ".join(label_parts)
+                                
+                                # Render bbox and segment crops side-by-side
+                                crops_bbox = []
+                                crops_seg = []
+                                for det in comp:
+                                    crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], det["color"])
+                                    crops_bbox.append(crop_bbox)
+                                    crops_seg.append(crop_seg)
+                                    
+                                valid_indices = [idx for idx, c in enumerate(crops_bbox) if c is not None]
+                                if valid_indices:
+                                    max_h = max(crops_bbox[idx].shape[0] for idx in valid_indices)
+                                    padded_bbox = []
+                                    padded_seg = []
+                                    widths = []
+                                    for idx in valid_indices:
+                                        c_bbox = crops_bbox[idx]
+                                        c_seg = crops_seg[idx]
+                                        h_c, w_c = c_bbox.shape[:2]
+                                        widths.append(w_c)
+                                        
+                                        pad_b = np.zeros((max_h, w_c, 3), dtype=np.uint8)
+                                        pad_b[0:h_c, 0:w_c] = c_bbox
+                                        padded_bbox.append(pad_b)
+                                        
+                                        pad_s = np.zeros((max_h, w_c, 3), dtype=np.uint8)
+                                        pad_s[0:h_c, 0:w_c] = c_seg
+                                        padded_seg.append(pad_s)
+                                        
+                                    bbox_row = np.hstack(padded_bbox)
+                                    seg_row = np.hstack(padded_seg)
+                                    
+                                    # Draw dividers between panels
+                                    curr_x = 0
+                                    for w_c in widths[:-1]:
+                                        curr_x += w_c
+                                        cv2.line(bbox_row, (curr_x, 0), (curr_x, max_h), (80, 80, 80), 2)
+                                        cv2.line(seg_row, (curr_x, 0), (curr_x, max_h), (80, 80, 80), 2)
+                                        
+                                    _, ob_buf = cv2.imencode(".jpg", bbox_row)
+                                    ob_b64 = base64.b64encode(ob_buf).decode("utf-8")
+                                    
+                                    _, os_buf = cv2.imencode(".jpg", seg_row)
+                                    os_b64 = base64.b64encode(os_buf).decode("utf-8")
+                                    
+                                    preview_items.append({
+                                        "label": label_text,
+                                        "image": ob_b64,
+                                        "category": "overlap"
+                                    })
+                                    preview_items.append({
+                                        "label": "",
+                                        "image": os_b64,
+                                        "category": "overlap"
+                                    })
 
                             # --- 3. NOT OVERLAP SECTION ---
-                            for i in range(num_sources):
-                                for det in tagged_sources[i]:
-                                    if len(det["matched_with"]) == 0:
-                                        c_id = det["anno"]["class_id"]
-                                        color = "#10b981"
-                                        if c_id < len(src_classes):
-                                            color = src_classes[c_id]["color"]
-                                            
-                                        crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], color)
-                                        
-                                        if crop_bbox is not None and crop_seg is not None:
-                                            row_img = np.hstack([crop_bbox, crop_seg])
-                                            h_row, w_row = row_img.shape[:2]
-                                            cv2.line(row_img, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
-                                            
-                                            _, no_buf = cv2.imencode(".jpg", row_img)
-                                            no_b64 = base64.b64encode(no_buf).decode("utf-8")
-                                            
-                                            preview_items.append({
-                                                "label": f"Not Overlap: From {det['pin_label']} (BBox | Segment)",
-                                                "image": no_b64
-                                            })
+                            for det in not_overlap_detections:
+                                c_id = det["anno"]["class_id"]
+                                color = "#10b981"
+                                class_name = f"Class {c_id}"
+                                if c_id < len(src_classes):
+                                    color = src_classes[c_id]["color"]
+                                    class_name = src_classes[c_id]["name"]
+                                    
+                                crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], color)
+                                if crop_bbox is not None and crop_seg is not None:
+                                    row_img = np.hstack([crop_bbox, crop_seg])
+                                    h_row, w_row = row_img.shape[:2]
+                                    cv2.line(row_img, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
+                                    
+                                    _, no_buf = cv2.imencode(".jpg", row_img)
+                                    no_b64 = base64.b64encode(no_buf).decode("utf-8")
+                                    
+                                    preview_items.append({
+                                        "label": f"Not Overlap: From {det['pin_label']} ({class_name}) (BBox | Segment)",
+                                        "image": no_b64,
+                                        "category": "not_overlap"
+                                    })
 
                             with cache_lock:
                                 previews[p_node_id] = preview_items

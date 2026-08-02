@@ -31,6 +31,122 @@
       flex-direction: column;
     }
 
+    /* Tab Bar Styles */
+    #tab-bar {
+      display: flex;
+      align-items: center;
+      background: #0b0f19;
+      border-bottom: 1px solid var(--border);
+      padding: 6px 12px;
+      gap: 8px;
+      user-select: none;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+    #tabs-container {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      flex: 1;
+    }
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+    .tab:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+    .tab.active {
+      background: rgba(168, 85, 247, 0.15);
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+    .tab-options-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      border-radius: 3px;
+      transition: all 0.15s ease;
+    }
+    .tab-options-btn:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.1);
+    }
+    #add-tab-btn {
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      line-height: 1;
+      transition: all 0.2s ease;
+    }
+    #add-tab-btn:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .tab-dropdown {
+      position: absolute;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      padding: 4px 0;
+      min-width: 100px;
+      margin-top: 4px;
+    }
+    .tab-dropdown-item {
+      padding: 6px 12px;
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      text-align: left;
+      border: none;
+      background: none;
+      width: 100%;
+      transition: all 0.15s ease;
+    }
+    .tab-dropdown-item:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+    .tab-dropdown-item.delete {
+      color: #ef4444;
+    }
+    .tab-dropdown-item.delete:hover {
+      background: rgba(239, 68, 68, 0.1);
+      color: #f87171;
+    }
+
     /* Header */
     #header {
       height: 60px;
@@ -421,6 +537,47 @@
       overflow: hidden;
     }
     
+    /* Fixed Zoom Controls CSS */
+    .zoom-controls {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 999;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .zoom-controls button {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      user-select: none;
+    }
+    .zoom-controls button:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .zoom-controls button:active {
+      transform: scale(0.95);
+    }
+    
     /* Class selector list inside Input nodes */
     .class-list-container {
       display: flex;
@@ -585,6 +742,12 @@
 </head>
 <body>
 
+  <!-- Top Tab Bar -->
+  <div id="tab-bar">
+    <div id="tabs-container"></div>
+    <button id="add-tab-btn" title="Create New Flow">+</button>
+  </div>
+
   <!-- Header -->
   <div id="header">
     <div class="brand">
@@ -669,6 +832,11 @@
         <div id="nodes-container">
           <!-- Nodes DOM elements will be injected here -->
         </div>
+      </div>
+      <div class="zoom-controls">
+        <button id="zoom-in-btn" title="Zoom In">+</button>
+        <button id="zoom-out-btn" title="Zoom Out">−</button>
+        <button id="zoom-reset-btn" title="Reset Zoom">⟲</button>
       </div>
     </div>
   </div>
