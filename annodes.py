@@ -1,11 +1,12 @@
 import os
 import sys
+import shutil
 import json
 import sqlite3
 import base64
 import argparse
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -156,6 +157,21 @@ init_db()
 def read_root():
     return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
+@app.get("/{flow_id}")
+def read_flow_tab(flow_id: int):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM canvas_tabs WHERE id = ?", (flow_id,))
+        if cursor.fetchone():
+            cursor.execute("UPDATE canvas_tabs SET is_active = 0")
+            cursor.execute("UPDATE canvas_tabs SET is_active = 1 WHERE id = ?", (flow_id,))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        pass
+    return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
+
 @app.get("/annodes.js")
 def read_js():
     return FileResponse(os.path.join(BASE_DIR, "annodes.js"))
@@ -169,15 +185,19 @@ def get_models():
 
 @app.get("/api/gpus")
 def get_gpus():
-    # Return available torch devices
-    devices = ["cpu"]
+    gpus = []
     try:
         import torch
         if torch.cuda.is_available():
-            devices.append("cuda")
-    except ImportError:
-        pass
-    return devices
+            num_gpus = torch.cuda.device_count()
+            for i in range(num_gpus):
+                name = torch.cuda.get_device_name(i)
+                mem_total = torch.cuda.get_device_properties(i).total_memory // (1024 * 1024)
+                gpus.append({"id": f"cuda:{i}", "name": f"GPU {i}: {name} ({mem_total} MB)"})
+        gpus.append({"id": "cpu", "name": "CPU"})
+        return {"success": True, "gpus": gpus}
+    except Exception as e:
+        return {"success": False, "gpus": [{"id": "cpu", "name": "CPU"}], "error": str(e)}
 
 @app.get("/api/yolo-model-names")
 def get_yolo_model_names(model: str):
@@ -325,6 +345,20 @@ def get_node_image(node_id: str):
         img_b64 = base64.b64encode(buffer).decode("utf-8")
 
         return {"success": True, "image": img_b64}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/upload-image")
+async def upload_image(file: UploadFile = File(...)):
+    try:
+        upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        file_path = os.path.join(upload_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        return {"success": True, "path": f"uploads/{file.filename}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -862,8 +896,16 @@ def run_flow(payload: RunFlowRequest):
             # Extract list of prompt texts from keys of prompt_bindings
             prompts = [p.strip() for p in prompt_bindings.keys() if p.strip()]
 
-            if not prompts:
-                # If no prompts are defined, return empty
+            # Get connected point input
+            point_source = connections_to.get((node_id, "point"))
+            point_data = None
+            if point_source:
+                point_data = evaluate(point_source[0], point_source[1])
+            
+            has_points = point_data is not None and "points" in point_data and point_data["points"]
+            
+            if not prompts and not has_points:
+                # If no prompts and no points are defined, return empty
                 # Copy image for preview (or just load it)
                 img = cv2.imread(src_image_path)
                 if img is not None:
@@ -872,7 +914,7 @@ def run_flow(payload: RunFlowRequest):
                 else:
                     preview_b64 = ""
                 
-                log_html = '<div style="color:var(--text-muted);">No prompts configured in prompt bindings. Add a prompt binding first.</div>'
+                log_html = '<div style="color:var(--text-muted);">No prompts or points configured. Add a prompt binding or connect a pointer node.</div>'
                 
                 with cache_lock:
                     eval_cache[(node_id, "image")] = src_image_path
@@ -910,7 +952,15 @@ def run_flow(payload: RunFlowRequest):
                 predictor = _get_sam3_predictor(model_file, model_path, sam3_device, sam3_conf)
                 predictor.set_image(src_image_path)
                 with redirect_stdout(f_stdout), redirect_stderr(f_stderr):
-                    results = predictor(text=prompts)
+                    predict_kwargs = {}
+                    if prompts:
+                        predict_kwargs["text"] = prompts
+                    if has_points:
+                        if "points" in point_data and "labels" in point_data:
+                            predict_kwargs["points"] = point_data["points"]
+                            predict_kwargs["labels"] = point_data["labels"]
+                    
+                    results = predictor(**predict_kwargs)
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue()
             except Exception as e:
                 verbose_log = log_capture_string.getvalue() + f_stdout.getvalue() + f_stderr.getvalue() + f"\nError: {str(e)}"

@@ -588,6 +588,30 @@
     }
   }
 
+  function refreshConnectedPointers(sourceNodeId) {
+    const downstream = new Set();
+    downstream.add(sourceNodeId);
+    
+    let added = true;
+    while (added) {
+      added = false;
+      _connections.forEach(conn => {
+        if (downstream.has(conn.fromNodeId) && !downstream.has(conn.toNodeId)) {
+          downstream.add(conn.toNodeId);
+          added = true;
+        }
+      });
+    }
+
+    downstream.forEach(id => {
+      if (id === sourceNodeId) return;
+      const node = _nodes.find(n => n.id === id);
+      if (node && node.type === 'pointer') {
+        updatePointerNodeImage(id);
+      }
+    });
+  }
+
   function renderPointsOverlay(node) {
     const wrapper = document.getElementById(`pointer-wrapper-${node.id}`);
     if (!wrapper) return;
@@ -704,11 +728,11 @@
 
     const targets = Array.from(downstream).filter(id => {
       const node = _nodes.find(n => n.id === id);
-      return node && (node.type === 'preview' || node.type === 'overlap_comparator');
+      return node && (node.type === 'preview' || node.type === 'overlap_comparator' || node.type === 'pointer' || node.type === 'sam3' || node.type === 'yolo_detector');
     });
 
     if (targets.length === 0) {
-      showToast('Tidak ada node Preview/Overlap Comparator yang terhubung di bawah input ini!', 'warning');
+      showToast('Tidak ada node valid (Preview/Pointer/Model) yang terhubung di bawah input ini!', 'warning');
       return;
     }
 
@@ -785,12 +809,33 @@
         createInputField('Image Path', 'text', node.properties.image_path, (v) => {
           node.properties.image_path = v;
           saveCanvas();
+          refreshConnectedPointers(node.id);
         }),
         createInputField('Annotation Path (.txt)', 'text', node.properties.annotation_path, (v) => {
           node.properties.annotation_path = v;
           saveCanvas();
         })
       );
+
+      // Drag and Drop support
+      body.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.add('drag-over');
+      });
+      body.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove('drag-over');
+      });
+      body.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.classList.remove('drag-over');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          uploadFileAndUpdateNode(e.dataTransfer.files[0], node.id);
+        }
+      });
 
       // Classes editor
       const classGroup = document.createElement('div');
@@ -823,6 +868,7 @@
         createInputField('Images Folder', 'text', node.properties.images_dir, (v) => {
           node.properties.images_dir = v;
           saveCanvas();
+          refreshConnectedPointers(node.id);
         }),
         createInputField('Labels Folder', 'text', node.properties.labels_dir, (v) => {
           node.properties.labels_dir = v;
@@ -1005,7 +1051,8 @@
       const pins = createPinsLayout(node, 
         [
           { name: 'image', label: 'Image' },
-          { name: 'class', label: 'Class' }
+          { name: 'class', label: 'Class' },
+          { name: 'point', label: 'Point', optional: true }
         ],
         [
           { name: 'image', label: 'Image' },
@@ -1947,6 +1994,13 @@
     // Auto save layout before execution
     await saveCanvas();
 
+    // Refresh all pointer node images from backend
+    _nodes.forEach(n => {
+      if (n.type === 'pointer') {
+        updatePointerNodeImage(n.id);
+      }
+    });
+
     // Reset any existing processing glow styles
     document.querySelectorAll('.node').forEach(el => {
       el.classList.remove('processing-glow', 'preview-pulse-glow');
@@ -2038,6 +2092,54 @@
       el.remove();
     }, 4000);
   };
+
+  async function uploadFileAndUpdateNode(file, nodeId) {
+    if (!file || !file.type.startsWith('image/')) {
+      showToast('File must be an image', 'error');
+      return;
+    }
+    const node = _nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      showToast('Uploading image...', 'info');
+      const res = await fetch('/api/upload-image', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (data.success) {
+        node.properties.image_path = data.path;
+        showToast('Image uploaded successfully', 'success');
+        refreshNodeDOM(node);
+        saveCanvas();
+        refreshConnectedPointers(nodeId);
+      } else {
+        showToast('Upload failed: ' + data.detail, 'error');
+      }
+    } catch (e) {
+      showToast('Upload error: ' + e.message, 'error');
+    }
+  }
+
+  // Global paste listener
+  document.addEventListener('paste', (e) => {
+    if (!_selectedNodeId) return;
+    const node = _nodes.find(n => n.id === _selectedNodeId);
+    if (node && node.type === 'single_image') {
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          uploadFileAndUpdateNode(file, _selectedNodeId);
+          break;
+        }
+      }
+    }
+  });
 
   // Run initial loading
   window.addEventListener('DOMContentLoaded', init);
