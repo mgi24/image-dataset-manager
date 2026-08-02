@@ -240,6 +240,94 @@ def load_canvas():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/node-image/{node_id}")
+def get_node_image(node_id: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT nodes, connections FROM canvas_tabs WHERE is_active = 1 LIMIT 1")
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            raise HTTPException(status_code=400, detail="No active flow found")
+
+        canvas_nodes_list = json.loads(row[0])
+        canvas_connections_list = json.loads(row[1])
+
+        nodes = {n["id"]: n for n in canvas_nodes_list}
+        connections_to = {}
+        for conn_item in canvas_connections_list:
+            to_node = conn_item.get("toNodeId")
+            to_pin = conn_item.get("toPinName")
+            from_node = conn_item.get("fromNodeId")
+            from_pin = conn_item.get("fromPinName")
+            if to_node and to_pin:
+                connections_to[(to_node, to_pin)] = (from_node, from_pin)
+
+        # Replicate index resolution for folder node
+        is_folder_mode = False
+        current_image_filename = ""
+        
+        folder_node = None
+        for n in canvas_nodes_list:
+            if n["type"] == "folder":
+                folder_node = n
+                break
+
+        if folder_node:
+            images_dir = folder_node["properties"].get("images_dir", "").strip()
+            if images_dir and os.path.exists(images_dir):
+                img_extensions = ('.jpg', '.jpeg', '.png')
+                images = sorted([f for f in os.listdir(images_dir) if f.lower().endswith(img_extensions)])
+                if images:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT current_index FROM flow_state LIMIT 1")
+                    db_row = cursor.fetchone()
+                    conn.close()
+                    
+                    current_index = db_row[0] if db_row else 0
+                    active_idx = (current_index - 1) % len(images)
+                    current_image_filename = images[active_idx]
+
+        # Nested evaluate function just for path resolution
+        def evaluate_path(n_id: str, pin_name: str) -> str:
+            n = nodes.get(n_id)
+            if not n:
+                raise Exception(f"Node {n_id} not found")
+            if n["type"] in ("single_image", "folder"):
+                if n["type"] == "folder":
+                    img_dir = n["properties"].get("images_dir", "").strip()
+                    return os.path.join(img_dir, current_image_filename)
+                else:
+                    return n["properties"].get("image_path", "").strip()
+            
+            src = connections_to.get((n_id, "image"))
+            if not src:
+                raise Exception(f"Node {n_id} has no image input connected")
+            return evaluate_path(src[0], src[1])
+
+        # Get connected image input for target node
+        img_src = connections_to.get((node_id, "image"))
+        if not img_src:
+            raise HTTPException(status_code=400, detail="No Image input connected to this node")
+
+        src_image_path = evaluate_path(img_src[0], img_src[1])
+        if not src_image_path or not os.path.exists(src_image_path):
+            raise HTTPException(status_code=400, detail=f"Image file '{src_image_path}' not found")
+
+        img = cv2.imread(src_image_path)
+        if img is None:
+            raise HTTPException(status_code=500, detail="Failed to load image file")
+
+        _, buffer = cv2.imencode(".jpg", img)
+        img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+        return {"success": True, "image": img_b64}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/tabs")
 def get_tabs():
     try:
@@ -956,6 +1044,96 @@ def run_flow(payload: RunFlowRequest):
 
             return eval_cache[cache_key]
 
+        # 4. Pointer Node
+        elif node["type"] == "pointer":
+            event_queue.put({"type": "start", "node_id": node_id})
+
+            # Get connected image input
+            img_source = connections_to.get((node_id, "image"))
+            if not img_source:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="Pointer node is missing connected 'Image' input")
+            
+            src_image_path = evaluate(img_source[0], img_source[1])
+
+            # Get points
+            raw_points = node["properties"].get("points", [])
+            
+            # Draw preview base64
+            img = cv2.imread(src_image_path)
+            if img is None:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for Pointer preview")
+            h, w = img.shape[:2]
+
+            # If there are no points, it is blocking!
+            if not raw_points:
+                # We still generate a preview of the clean image so the user can see it to click!
+                _, buffer = cv2.imencode(".jpg", img)
+                preview_b64 = base64.b64encode(buffer).decode("utf-8")
+                
+                with cache_lock:
+                    previews[node_id] = preview_b64
+                    logs[node_id] = "Blocking: Please select at least one point on the image to continue."
+                    eval_cache[(node_id, "image")] = src_image_path
+                    eval_cache[(node_id, "point")] = {"points": [], "labels": []}
+                
+                event_queue.put({"type": "end", "node_id": node_id})
+                event_queue.put({
+                    "type": "preview",
+                    "node_id": node_id,
+                    "preview": preview_b64,
+                    "logs": logs[node_id]
+                })
+                raise HTTPException(status_code=400, detail="Pointer node blocking: Silakan tentukan titik (point) pada gambar terlebih dahulu.")
+
+            # If there are points, draw them on the preview
+            preview_img = img.copy()
+            for pt in raw_points:
+                pt_x = int(pt["x"] * w)
+                pt_y = int(pt["y"] * h)
+                label = pt["label"]
+                color = (0, 255, 0) if label == 1 else (0, 0, 255) # Green positive, Red negative
+                cv2.circle(preview_img, (pt_x, pt_y), 8, color, -1)
+                cv2.circle(preview_img, (pt_x, pt_y), 8, (255, 255, 255), 2)
+                text = "+" if label == 1 else "-"
+                cv2.putText(preview_img, text, (pt_x - 5, pt_y + 4), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+            _, buffer = cv2.imencode(".jpg", preview_img)
+            preview_b64 = base64.b64encode(buffer).decode("utf-8")
+
+            # Convert point list to format compatible with SAM/SAM3 predictor or general usage:
+            # point_data is dict: {"points": [[x, y], ...], "labels": [1, 0, ...]}
+            # where coordinates are absolute in the original image space
+            points_list = []
+            labels_list = []
+            for pt in raw_points:
+                points_list.append([float(pt["x"] * w), float(pt["y"] * h)])
+                labels_list.append(int(pt["label"]))
+
+            point_data = {
+                "points": points_list,
+                "labels": labels_list
+            }
+
+            with cache_lock:
+                previews[node_id] = preview_b64
+                logs[node_id] = f"Processed {len(raw_points)} points."
+                # Cache outputs
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "point")] = point_data
+
+            event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": preview_b64,
+                "logs": logs[node_id]
+            })
+
+            return eval_cache[cache_key]
+
         raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
 
     def run_all():
@@ -1449,8 +1627,8 @@ def run_flow(payload: RunFlowRequest):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=len(preview_nodes)) as executor:
                     executor.map(process_preview, preview_nodes)
             else:
-                # Spawning evaluations for YOLO or SAM3 directly
-                direct_nodes = [n for n in payload.nodes if n["type"] in ("yolo_detector", "sam3")]
+                # Spawning evaluations for YOLO or SAM3 or pointer directly
+                direct_nodes = [n for n in payload.nodes if n["type"] in ("yolo_detector", "sam3", "pointer")]
                 if direct_nodes:
                     def process_direct(n):
                         try:

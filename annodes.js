@@ -437,6 +437,14 @@
           preview_width: 320,
           preview_height: 240
         };
+      } else if (type === 'pointer') {
+        properties = {
+          points: [],
+          active_mode: 'positive',
+          last_preview: null,
+          preview_width: 320,
+          preview_height: 240
+        };
       }
     }
 
@@ -559,6 +567,55 @@
 
     container.append(inCol, outCol);
     return container;
+  }
+
+  async function updatePointerNodeImage(nodeId) {
+    try {
+      const r = await fetch(`/api/node-image/${nodeId}`);
+      if (r.ok) {
+        const data = await r.json();
+        const node = _nodes.find(n => n.id === nodeId);
+        if (node && data.image) {
+          node.properties.last_preview = data.image;
+          saveCanvas();
+          refreshNodeDOM(node);
+        }
+      } else {
+        console.error("Failed to load image for pointer node", nodeId);
+      }
+    } catch (err) {
+      console.error("Error fetching pointer image", err);
+    }
+  }
+
+  function renderPointsOverlay(node) {
+    const wrapper = document.getElementById(`pointer-wrapper-${node.id}`);
+    if (!wrapper) return;
+
+    // Clear existing dots
+    wrapper.querySelectorAll('.pointer-dot').forEach(el => el.remove());
+
+    const points = node.properties.points || [];
+    points.forEach((pt, idx) => {
+      const dot = document.createElement('div');
+      dot.className = `pointer-dot ${pt.label === 1 ? 'positive' : 'negative'}`;
+      dot.style.left = (pt.x * 100) + '%';
+      dot.style.top = (pt.y * 100) + '%';
+      dot.style.transform = 'translate(-50%, -50%)';
+      dot.textContent = pt.label === 1 ? '+' : '-';
+      
+      dot.title = `Point #${idx + 1} (${pt.label === 1 ? 'Positive' : 'Negative'}) - Right-click to remove`;
+      dot.style.pointerEvents = 'auto';
+      dot.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        node.properties.points.splice(idx, 1);
+        saveCanvas();
+        renderPointsOverlay(node);
+      };
+
+      wrapper.appendChild(dot);
+    });
   }
 
   // --- Rendering Nodes DOM ---
@@ -687,7 +744,7 @@
     const rightControls = document.createElement('div');
     rightControls.style.cssText = 'display:flex; align-items:center; gap:6px;';
 
-    if (node.type === 'single_image' || node.type === 'folder') {
+    if (node.type === 'single_image' || node.type === 'folder' || node.type === 'pointer') {
       const runBtn = document.createElement('button');
       runBtn.textContent = '▶ Run';
       runBtn.title = 'Jalankan flow dari input ini';
@@ -1199,6 +1256,110 @@
       };
       body.appendChild(previewContainer);
       setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
+    } else if (node.type === 'pointer') {
+      const pins = createPinsLayout(node, 
+        [
+          { name: 'image', label: 'Image' }
+        ],
+        [
+          { name: 'image', label: 'Image' },
+          { name: 'point', label: 'Point' }
+        ]
+      );
+      body.appendChild(pins);
+
+      // Render toolbar
+      const toolbar = document.createElement('div');
+      toolbar.className = 'pointer-toolbar';
+      
+      const btnPos = document.createElement('button');
+      btnPos.className = `pointer-btn ${node.properties.active_mode === 'positive' ? 'active-pos' : ''}`;
+      btnPos.innerHTML = '<span>➕</span> Pos';
+      btnPos.onclick = () => {
+        node.properties.active_mode = 'positive';
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+
+      const btnNeg = document.createElement('button');
+      btnNeg.className = `pointer-btn ${node.properties.active_mode === 'negative' ? 'active-neg' : ''}`;
+      btnNeg.innerHTML = '<span>➖</span> Neg';
+      btnNeg.onclick = () => {
+        node.properties.active_mode = 'negative';
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+
+      const btnReset = document.createElement('button');
+      btnReset.className = 'pointer-btn btn-reset';
+      btnReset.innerHTML = '<span>🔄</span> Reset';
+      btnReset.onclick = () => {
+        node.properties.points = [];
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+
+      toolbar.append(btnPos, btnNeg, btnReset);
+      body.appendChild(toolbar);
+
+      // Interaction Canvas
+      const previewContainer = document.createElement('div');
+      previewContainer.className = 'pointer-container resizable-box';
+      previewContainer.id = `pointer-container-${node.id}`;
+      
+      if (node.properties.preview_width) {
+        previewContainer.style.width = node.properties.preview_width + 'px';
+        previewContainer.style.height = node.properties.preview_height + 'px';
+      }
+      previewContainer.onmouseup = () => {
+        node.properties.preview_width = previewContainer.clientWidth;
+        node.properties.preview_height = previewContainer.clientHeight;
+        saveCanvas();
+      };
+
+      const isImageConnected = _connections.some(c => c.toNodeId === node.id && c.toPinName === 'image');
+
+      if (!isImageConnected) {
+        node.properties.last_preview = null;
+        const placeholder = document.createElement('span');
+        placeholder.className = 'preview-placeholder';
+        placeholder.textContent = 'Connect Image input';
+        previewContainer.appendChild(placeholder);
+      } else {
+        if (!node.properties.last_preview) {
+          const placeholder = document.createElement('span');
+          placeholder.className = 'preview-placeholder';
+          placeholder.textContent = 'Loading Image...';
+          previewContainer.appendChild(placeholder);
+          setTimeout(() => updatePointerNodeImage(node.id), 0);
+        } else {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'pointer-img-wrapper';
+          wrapper.id = `pointer-wrapper-${node.id}`;
+
+          const img = document.createElement('img');
+          img.className = 'pointer-img';
+          img.id = `pointer-img-${node.id}`;
+          img.src = `data:image/jpeg;base64,${node.properties.last_preview}`;
+          img.draggable = false;
+
+          img.onclick = (e) => {
+            const rect = img.getBoundingClientRect();
+            const x = (e.clientX - rect.left) / rect.width;
+            const y = (e.clientY - rect.top) / rect.height;
+            const label = node.properties.active_mode === 'positive' ? 1 : 0;
+            node.properties.points.push({ x, y, label });
+            saveCanvas();
+            renderPointsOverlay(node);
+          };
+
+          wrapper.appendChild(img);
+          previewContainer.appendChild(wrapper);
+          setTimeout(() => renderPointsOverlay(node), 0);
+        }
+      }
+
+      body.appendChild(previewContainer);
     }
 
     el.append(header, body);
@@ -1673,6 +1834,8 @@
                 refreshYoloBindings(toNodeId);
               } else if (targetNode.type === 'sam3') {
                 refreshSam3Bindings(toNodeId);
+              } else if (targetNode.type === 'pointer') {
+                updatePointerNodeImage(toNodeId);
               }
             }
           }
