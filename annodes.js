@@ -773,7 +773,7 @@
       const previewContainer = document.createElement('div');
       previewContainer.className = 'preview-container resizable-box';
       previewContainer.id = `preview-container-${node.id}`;
-      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px;';
+      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start;';
       if (node.properties.preview_width) {
         previewContainer.style.width = node.properties.preview_width + 'px';
         previewContainer.style.height = node.properties.preview_height + 'px';
