@@ -317,10 +317,10 @@
 
     items.forEach((b64, idx) => {
       const itemWrapper = document.createElement('div');
-      itemWrapper.style.cssText = 'width: 100%; margin-bottom: 6px; display: flex; flex-direction: column; gap: 2px;';
+      itemWrapper.style.cssText = 'width: 100%; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 4px; background: rgba(255,255,255,0.02);';
 
       const label = document.createElement('span');
-      label.style.cssText = 'font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;';
+      label.style.cssText = 'font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); color: #c084fc; width: fit-content;';
       if (items.length > 1) {
         label.textContent = idx === 0 ? '1. Overall Detection Segment' : `2. Detection #${idx} (BBox Crop | Segment Crop)`;
       } else {
@@ -330,7 +330,7 @@
 
       const img = document.createElement('img');
       img.className = 'preview-img';
-      img.style.cssText = 'width: 100%; height: auto; max-height: none; display: block; border-radius: 4px; border: 1px solid var(--border);';
+      img.style.cssText = 'width: 100%; height: auto; max-height: none; display: block; border-radius: 4px;';
       img.src = `data:image/jpeg;base64,${b64}`;
       img.draggable = false;
 
