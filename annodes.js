@@ -1156,7 +1156,7 @@
       if (!yoloModels.includes('platLarge.pt')) {
         yoloModels.unshift('platLarge.pt');
       }
-      if (!node.properties.model || node.properties.model === 'yolov8x-seg.pt') {
+      if (!node.properties.model) {
         node.properties.model = 'platLarge.pt';
       }
       yoloModels.forEach(m => {
