@@ -2548,17 +2548,136 @@
       showToast('Gagal memuat canvas dari DB', 'error');
     }
   }
-   async function handleFlowEvent(ev) {
+   // --- Floating Log Console Window & Progress Tracker ---
+  let _flowLogState = {
+    totalNodes: 0,
+    completedNodes: 0
+  };
+
+  function showFlowLogWindow() {
+    let win = document.getElementById('flow-log-window');
+    if (!win) {
+      win = document.createElement('div');
+      win.id = 'flow-log-window';
+      win.className = 'floating-log-window';
+      win.innerHTML = `
+        <div class="floating-log-header" id="flow-log-header">
+          <div class="floating-log-title">
+            <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor">
+              <path d="M13,0V6H19L11,24V18H5L13,0Z"/>
+            </svg>
+            Flow Execution Logs & Progress
+          </div>
+          <div class="floating-log-controls">
+            <button class="floating-log-btn" id="flow-log-clear-btn" title="Clear logs">🗑️ Clear</button>
+            <button class="floating-log-btn" id="flow-log-close-btn" title="Tutup Log Window">✕</button>
+          </div>
+        </div>
+        <div class="floating-log-body">
+          <div class="progress-info-row">
+            <span id="flow-progress-status" style="color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:320px;">Ready</span>
+            <span id="flow-progress-percent" style="color:#10b981; font-weight:700;">0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="flow-progress-bar"></div>
+          </div>
+          <div class="log-terminal" id="flow-log-console">
+            <div class="log-line-info">[SYSTEM] Flow Log Console initialized.</div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(win);
+
+      // Draggable window header
+      const header = win.querySelector('#flow-log-header');
+      let isDragging = false, startX, startY, initialLeft, initialTop;
+
+      header.onmousedown = (e) => {
+        if (e.target.closest('.floating-log-btn')) return;
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = win.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      };
+
+      function onMouseMove(e) {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        win.style.left = `${initialLeft + dx}px`;
+        win.style.top = `${initialTop + dy}px`;
+        win.style.right = 'auto';
+      }
+
+      function onMouseUp() {
+        isDragging = false;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+
+      // Close & Clear Buttons
+      win.querySelector('#flow-log-close-btn').onclick = () => {
+        win.style.display = 'none';
+      };
+      win.querySelector('#flow-log-clear-btn').onclick = () => {
+        const consoleEl = win.querySelector('#flow-log-console');
+        if (consoleEl) consoleEl.innerHTML = '<div class="log-line-info">[SYSTEM] Logs cleared.</div>';
+      };
+    } else {
+      win.style.display = 'flex';
+    }
+    return win;
+  }
+
+  function updateFlowProgress(percent, statusText) {
+    showFlowLogWindow();
+    const fillEl = document.getElementById('flow-progress-bar');
+    const pctEl = document.getElementById('flow-progress-percent');
+    const statusEl = document.getElementById('flow-progress-status');
+    if (fillEl) fillEl.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    if (pctEl) pctEl.textContent = `${Math.round(percent)}%`;
+    if (statusEl && statusText) statusEl.textContent = statusText;
+  }
+
+  function appendFlowLogLine(text, level = 'info') {
+    showFlowLogWindow();
+    const consoleEl = document.getElementById('flow-log-console');
+    if (!consoleEl) return;
+    
+    const timeStr = new Date().toLocaleTimeString('id-ID', { hour12: false });
+    const line = document.createElement('div');
+    line.className = `log-line-${level}`;
+    line.textContent = `[${timeStr}] ${text}`;
+    
+    consoleEl.appendChild(line);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+
+  async function handleFlowEvent(ev) {
     if (ev.type === 'start') {
       const nodeEl = document.getElementById(ev.node_id);
       if (nodeEl) {
         nodeEl.classList.add('processing-glow');
       }
+      const n = _nodes.find(node => node.id === ev.node_id);
+      const nodeTitle = n ? `${n.type.toUpperCase()} (${ev.node_id})` : ev.node_id;
+      appendFlowLogLine(`[START] Evaluating node: ${nodeTitle}`, 'start');
+      const pct = Math.min(95, Math.round((_flowLogState.completedNodes / Math.max(1, _flowLogState.totalNodes)) * 100));
+      updateFlowProgress(pct, `Running ${nodeTitle}...`);
+
     } else if (ev.type === 'end') {
       const nodeEl = document.getElementById(ev.node_id);
       if (nodeEl) {
         nodeEl.classList.remove('processing-glow');
       }
+      _flowLogState.completedNodes++;
+      const pct = Math.min(99, Math.round((_flowLogState.completedNodes / Math.max(1, _flowLogState.totalNodes)) * 100));
+      updateFlowProgress(pct, `Finished node ${ev.node_id}`);
+
     } else if (ev.type === 'preview') {
       const nodeId = ev.node_id;
       const node = _nodes.find(n => n.id === nodeId);
@@ -2595,20 +2714,37 @@
             logsConsole.innerHTML = ev.logs;
             logsConsole.scrollTop = logsConsole.scrollHeight;
           }
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = ev.logs;
+          const cleanLogText = tempDiv.textContent || tempDiv.innerText || '';
+          if (cleanLogText.trim()) {
+            appendFlowLogLine(`[NODE LOG] ${node.type.toUpperCase()}: ${cleanLogText.trim()}`, 'success');
+          }
+        } else {
+          appendFlowLogLine(`[OUTPUT] Generated result for ${node.type.toUpperCase()} (${nodeId})`, 'success');
         }
         
         saveCanvas();
       }
     } else if (ev.type === 'done') {
+      const statusText = ev.is_folder_mode ? `Folder Image ${ev.current_index + 1}/${ev.total_images}: ${ev.filename}` : `Completed: ${ev.filename || 'Flow Done'}`;
+      updateFlowProgress(100, statusText);
+      appendFlowLogLine(`[DONE] ${statusText}`, 'success');
       showToast(`Berhasil memproses: ${ev.filename || ''}`, 'success');
       saveCanvas();
     } else if (ev.type === 'error') {
+      appendFlowLogLine(`[ERROR] ${ev.message}`, 'error');
       showToast(ev.message || 'Terjadi kesalahan saat memproses flow.', 'error');
     }
   }
 
   // --- Execute Flow (Run Flow) ---
   window.runFlow = async function (runOnlyNodes = null) {
+    showFlowLogWindow();
+    _flowLogState.completedNodes = 0;
+    _flowLogState.totalNodes = runOnlyNodes ? runOnlyNodes.length : _nodes.length;
+    updateFlowProgress(5, 'Initializing flow execution...');
+    appendFlowLogLine('=== RUN FLOW STARTED ===', 'info');
     showToast('Menjalankan flow auto-annotation...', 'info');
     
     // Auto save layout before execution
