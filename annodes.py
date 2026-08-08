@@ -1303,21 +1303,48 @@ def run_flow(payload: RunFlowRequest):
                     conf_val = float(box.conf[0].item())
                     
                     # Map to custom class index if bound
-                    bind_val = class_bindings.get(str(cls_id))
-                    
+                    mapped_class_id = None
                     target_class_name = None
                     target_color = "#3b82f6" # default blue
-                    mapped_class_id = cls_id
-                    
-                    if bind_val is not None and bind_val != "" and int(bind_val) < len(src_classes):
-                        mapped_class_id = int(bind_val)
-                        target_class_name = src_classes[mapped_class_id]["name"]
-                        target_color = src_classes[mapped_class_id]["color"]
-                    else:
-                        if cls_id < len(yolo.names):
-                            target_class_name = yolo.names[cls_id]
+
+                    # 1. Direct lookup: class_bindings stores { yolo_cls_id: custom_cls_idx }
+                    bind_val = class_bindings.get(str(cls_id))
+                    if bind_val is not None and bind_val != "":
+                        try:
+                            c_idx = int(bind_val)
+                            if c_idx < len(src_classes):
+                                mapped_class_id = c_idx
+                                target_class_name = src_classes[c_idx]["name"]
+                                target_color = src_classes[c_idx]["color"]
+                        except ValueError:
+                            pass
+
+                    # 2. Reverse lookup: class_bindings stores { custom_cls_idx: yolo_cls_id }
+                    if mapped_class_id is None:
+                        for cust_cls_idx_str, yolo_cls_id_str in class_bindings.items():
+                            if str(yolo_cls_id_str) == str(cls_id):
+                                try:
+                                    c_idx = int(cust_cls_idx_str)
+                                    if c_idx < len(src_classes):
+                                        mapped_class_id = c_idx
+                                        target_class_name = src_classes[c_idx]["name"]
+                                        target_color = src_classes[c_idx]["color"]
+                                        break
+                                except ValueError:
+                                    pass
+
+                    # 3. Direct index fallback: if raw cls_id fits into src_classes (0..len-1)
+                    if mapped_class_id is None:
+                        if cls_id < len(src_classes):
+                            mapped_class_id = cls_id
+                            target_class_name = src_classes[cls_id]["name"]
+                            target_color = src_classes[cls_id]["color"]
                         else:
-                            target_class_name = f"Class {cls_id}"
+                            mapped_class_id = cls_id
+                            if cls_id < len(yolo.names):
+                                target_class_name = yolo.names[cls_id]
+                            else:
+                                target_class_name = f"Class {cls_id}"
 
                     bgr = hex_to_bgr(target_color)
 
