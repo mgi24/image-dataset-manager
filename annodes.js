@@ -1581,8 +1581,8 @@
         <span class="field-label">Class Rules Bindings</span>
         <div style="font-size:0.68rem; color:var(--text-muted); margin:3px 0 6px 0; line-height:1.4;">
           Tag placeholder yang tersedia:<br/>
-          <code style="color:#34d399; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{class_rules}</code>: Daftar aturan kelas binding<br/>
-          <code style="color:#38bdf8; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{class}</code>: Daftar kelas yang tersedia (Available Classes)
+          <code style="color:#34d399; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">&#123;class_rules&#125;</code>: Daftar aturan kelas binding<br/>
+          <code style="color:#38bdf8; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">&#123;class&#125;</code>: Daftar kelas yang tersedia (Available Classes)
         </div>
         <div id="rules-list-${node.id}" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;"></div>
         <div id="class-list-container-${node.id}" style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.06); padding-top:8px;"></div>
@@ -1603,11 +1603,11 @@
         
         <div style="font-size:0.68rem; color:var(--text-muted); margin-top:5px; line-height:1.4;">
           Tag placeholder pasangan konflik IoU:<br/>
-          <code style="color:#fbbf24; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{image_input}</code>: Berisi info pasangan anotasi<br/>
-          <span style="color:var(--text-secondary); font-family:monospace;">image{index}:{annotation class}</span><br/>
+          <code style="color:#fbbf24; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">&#123;image_input&#125;</code>: Berisi info pasangan anotasi<br/>
+          <span style="color:var(--text-secondary); font-family:monospace;">image&#123;index&#125;:&#123;annotation class&#125;</span><br/>
           <i>Contoh data konflik:</i><br/>
           <span style="color:#94a3b8; font-family:monospace;">image 1: car<br/>image 2: truck<br/>image 3: truck</span><br/>
-          <span style="color:var(--text-muted); font-size:0.65rem;">(Jika `{}` diisi dalam global rules di atas, info tambahan tersebut akan dikirim ke AI)</span>
+          <span style="color:var(--text-muted); font-size:0.65rem;">(Jika tag placeholder diisi dalam global rules di atas, info tambahan tersebut akan dikirim ke AI)</span>
         </div>
 
         <div style="margin-top:8px;">
