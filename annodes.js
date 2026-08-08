@@ -2013,5 +2013,5 @@
   }
 
   // Run initial loading
-  window.addEventListener('DOMContentLoaded', init);
+  window.addEventListener('load', init);
 })();

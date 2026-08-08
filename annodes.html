@@ -1273,7 +1273,10 @@
   <!-- Toast Notifications -->
   <div id="toast-container"></div>
 
-  <!-- Node Modules -->
+  <!-- Load core script first so window.NodeDefaults / window.NodeRenderers / window.App are initialized -->
+  <script src="/annodes.js"></script>
+
+  <!-- Node Modules (must come AFTER annodes.js) -->
   <script src="/nodes/single_image.js"></script>
   <script src="/nodes/folder.js"></script>
   <script src="/nodes/yolo_detector.js"></script>
@@ -1284,8 +1287,5 @@
   <script src="/nodes/ai_queueing.js"></script>
   <script src="/nodes/pointer.js"></script>
   <script src="/nodes/save_annotation.js"></script>
-
-  <!-- Load script -->
-  <script src="/annodes.js"></script>
 </body>
 </html>
