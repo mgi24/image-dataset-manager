@@ -2964,22 +2964,23 @@
       n.properties.last_preview = null;
       n.properties.last_logs = null;
 
-      // Clear DOM preview container (for preview / overlap_comparator / ai_decision)
-      const previewContainer = document.getElementById(`preview-container-${n.id}`);
-      if (previewContainer) {
-        previewContainer.innerHTML = '<span class="preview-placeholder">Memproses...</span>';
-      }
-
-      // Clear DOM preview image (for yolo_detector / sam3 / pointer)
       const previewImg = document.getElementById(`preview-img-${n.id}`);
+      const previewPlaceholder = document.querySelector(`#preview-container-${n.id} .preview-placeholder`);
+      
       if (previewImg) {
+        // Node has an <img> element (yolo_detector, sam3, pointer)
         previewImg.src = '';
         previewImg.style.display = 'none';
-      }
-      const previewPlaceholder = document.querySelector(`#preview-container-${n.id} .preview-placeholder`);
-      if (previewPlaceholder) {
-        previewPlaceholder.style.display = 'block';
-        previewPlaceholder.textContent = 'Memproses...';
+        if (previewPlaceholder) {
+          previewPlaceholder.style.display = 'block';
+          previewPlaceholder.textContent = 'Memproses...';
+        }
+      } else {
+        // Multi-card container nodes (preview, overlap_comparator, ai_decision)
+        const previewContainer = document.getElementById(`preview-container-${n.id}`);
+        if (previewContainer) {
+          previewContainer.innerHTML = '<span class="preview-placeholder">Memproses...</span>';
+        }
       }
 
       // Clear DOM logs console
