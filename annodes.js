@@ -816,11 +816,11 @@
 
     const targets = Array.from(downstream).filter(id => {
       const node = _nodes.find(n => n.id === id);
-      return node && (node.type === 'preview' || node.type === 'overlap_comparator' || node.type === 'pointer' || node.type === 'sam3' || node.type === 'yolo_detector');
+      return node && (node.type === 'preview' || node.type === 'overlap_comparator' || node.type === 'pointer' || node.type === 'sam3' || node.type === 'yolo_detector' || node.type === 'save_annotation');
     });
 
     if (targets.length === 0) {
-      showToast('Tidak ada node valid (Preview/Pointer/Model) yang terhubung di bawah input ini!', 'warning');
+      showToast('Tidak ada node valid (Save Annotation/Preview/Pointer/Model) yang terhubung di bawah input ini!', 'warning');
       return;
     }
 
@@ -856,7 +856,7 @@
     const rightControls = document.createElement('div');
     rightControls.style.cssText = 'display:flex; align-items:center; gap:6px;';
 
-    if (node.type === 'single_image' || node.type === 'folder' || node.type === 'pointer') {
+    if (node.type === 'single_image' || node.type === 'folder' || node.type === 'pointer' || node.type === 'save_annotation' || node.type === 'preview' || node.type === 'overlap_comparator') {
       const runBtn = document.createElement('button');
       runBtn.textContent = '▶ Run';
       runBtn.title = 'Jalankan flow dari input ini';

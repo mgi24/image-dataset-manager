@@ -1989,6 +1989,13 @@ def run_flow(payload: RunFlowRequest):
                         except Exception as ex:
                             event_queue.put({"type": "end", "node_id": p_node_id})
                             event_queue.put({"type": "error", "message": f"Overlap Comparator node error: {str(ex)}"})
+                    elif n["type"] == "save_annotation":
+                        event_queue.put({"type": "start", "node_id": p_node_id})
+                        try:
+                            evaluate(p_node_id, "image")
+                        except Exception as ex:
+                            event_queue.put({"type": "end", "node_id": p_node_id})
+                            event_queue.put({"type": "error", "message": f"Save Annotation node error: {str(ex)}"})
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=len(preview_nodes)) as executor:
                     executor.map(process_preview, preview_nodes)
