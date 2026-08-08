@@ -931,6 +931,22 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                             }
                         })
 
+            # Calculate unified bounding box across ALL detections in component
+            all_boxes = []
+            for det in comp:
+                anno = det["anno"]
+                coords = anno["coords"]
+                is_seg = anno.get("is_segment", len(coords) > 4)
+                if is_seg:
+                    xs = coords[0::2]
+                    ys = coords[1::2]
+                    if len(xs) > 0 and len(ys) > 0:
+                        all_boxes.append((min(xs)*w, min(ys)*h, max(xs)*w, max(ys)*h))
+                else:
+                    if len(coords) >= 4:
+                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                        all_boxes.append(((xc - bw/2)*w, (yc - bh/2)*h, (xc + bw/2)*w, (yc + bh/2)*h))
+
             if all_boxes:
                 min_x = min(b[0] for b in all_boxes)
                 min_y = min(b[1] for b in all_boxes)
@@ -1355,7 +1371,8 @@ def run_flow(payload: RunFlowRequest):
                     
                     detected_objects_summary.append({
                         "class_name": target_class_name,
-                        "confidence": conf_val
+                        "confidence": conf_val,
+                        "is_segment": is_segment
                     })
 
             # Base64 encode YOLO preview image
@@ -1370,7 +1387,8 @@ def run_flow(payload: RunFlowRequest):
             if detected_objects_summary:
                 log_html += "<div><strong>Detections:</strong></div>"
                 for det in detected_objects_summary:
-                    log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}%</div>"
+                    tag_type = '<span style="color:#34d399; font-weight:bold;">[Segment]</span>' if det.get('is_segment') else '<span style="color:#38bdf8;">[BBox]</span>'
+                    log_html += f"<div>• {det['class_name']}: {det['confidence']*100:.1f}% {tag_type}</div>"
             else:
                 log_html += '<div style="color:var(--text-muted);">No detections</div>'
 
