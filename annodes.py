@@ -931,34 +931,123 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                             }
                         })
 
-                    # Generate SEPARATE PREVIEW ITEMS per image for det_A and det_B
-                    crop_bbox_A, crop_seg_A = get_detection_crops(det_A["anno"], color_A)
-                    if crop_bbox_A is not None and crop_seg_A is not None:
-                        row_img_A = np.hstack([crop_bbox_A, crop_seg_A])
-                        h_row, w_row = row_img_A.shape[:2]
-                        cv2.line(row_img_A, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
-                        _, buf_A = cv2.imencode(".jpg", row_img_A)
-                        b64_A = base64.b64encode(buf_A).decode("utf-8")
-                        
-                        preview_items.append({
-                            "label": f"Overlap ({det_A['pin_label']}: {c_name_A}) - IoU {iou_val*100:.0f}% w/ {det_B['pin_label']} [{action}]",
-                            "image": b64_A,
-                            "category": "overlap"
-                        })
+            # Calculate unified bounding box across ALL detections in component
+            all_boxes = []
+            for det in comp:
+                anno = det["anno"]
+                coords = anno["coords"]
+                is_seg = anno.get("is_segment", len(coords) > 4)
+                if is_seg:
+                    xs = coords[0::2]
+                    ys = coords[1::2]
+                    if len(xs) > 0 and len(ys) > 0:
+                        all_boxes.append((min(xs)*w, min(ys)*h, max(xs)*w, max(ys)*h))
+                else:
+                    if len(coords) >= 4:
+                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                        all_boxes.append(((xc - bw/2)*w, (yc - bh/2)*h, (xc + bw/2)*w, (yc + bh/2)*h))
 
-                    crop_bbox_B, crop_seg_B = get_detection_crops(det_B["anno"], color_B)
-                    if crop_bbox_B is not None and crop_seg_B is not None:
-                        row_img_B = np.hstack([crop_bbox_B, crop_seg_B])
-                        h_row, w_row = row_img_B.shape[:2]
-                        cv2.line(row_img_B, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
-                        _, buf_B = cv2.imencode(".jpg", row_img_B)
-                        b64_B = base64.b64encode(buf_B).decode("utf-8")
-                        
-                        preview_items.append({
-                            "label": f"Overlap ({det_B['pin_label']}: {c_name_B}) - IoU {iou_val*100:.0f}% w/ {det_A['pin_label']} [{action}]",
-                            "image": b64_B,
-                            "category": "overlap"
-                        })
+            if all_boxes:
+                min_x = min(b[0] for b in all_boxes)
+                min_y = min(b[1] for b in all_boxes)
+                max_x = max(b[2] for b in all_boxes)
+                max_y = max(b[3] for b in all_boxes)
+
+                pad_w = (max_x - min_x) * 0.15 + 10
+                pad_h = (max_y - min_y) * 0.15 + 10
+
+                cx1 = int(max(0, min_x - pad_w))
+                cy1 = int(max(0, min_y - pad_h))
+                cx2 = int(min(w, max_x + pad_w))
+                cy2 = int(min(h, max_y + pad_h))
+
+                cw = cx2 - cx1
+                ch = cy2 - cy1
+
+                if cw > 0 and ch > 0:
+                    bbox_crops = []
+                    seg_crops = []
+                    det_labels = []
+
+                    target_h = 160
+                    aspect = cw / float(ch)
+                    target_w = max(100, int(target_h * aspect))
+
+                    for det in comp:
+                        c_id = det["anno"]["class_id"]
+                        color_hex = src_classes[c_id]["color"] if c_id < len(src_classes) else "#3b82f6"
+                        c_name = src_classes[c_id]["name"] if c_id < len(src_classes) else f"Class {c_id}"
+                        bgr = hex_to_bgr(color_hex)
+                        coords = det["anno"]["coords"]
+                        is_segment = det["anno"].get("is_segment", len(coords) > 4)
+
+                        det_labels.append(f"{det['pin_label']}: {c_name}")
+
+                        # A. Generate BBox Outline Crop
+                        crop_bbox = img[cy1:cy2, cx1:cx2].copy()
+                        if is_segment:
+                            pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                            pts_offset = pts_px - [cx1, cy1]
+                            if len(pts_offset) >= 3:
+                                overlay = crop_bbox.copy()
+                                cv2.fillPoly(overlay, [pts_offset], bgr)
+                                cv2.addWeighted(overlay, 0.25, crop_bbox, 0.75, 0, crop_bbox)
+                                cv2.polylines(crop_bbox, [pts_offset], True, bgr, 2)
+                        else:
+                            overlay = crop_bbox.copy()
+                            cv2.rectangle(overlay, (0, 0), (cw, ch), bgr, -1)
+                            cv2.addWeighted(overlay, 0.25, crop_bbox, 0.75, 0, crop_bbox)
+                            cv2.rectangle(crop_bbox, (0, 0), (cw, ch), bgr, 2)
+
+                        # B. Generate Segment Mask Crop
+                        mask = np.zeros((h, w), dtype=np.uint8)
+                        if is_segment:
+                            pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                            if len(pts_px) >= 3:
+                                cv2.fillPoly(mask, [pts_px], 255)
+                        else:
+                            rx1 = int((coords[0] - coords[2]/2)*w)
+                            ry1 = int((coords[1] - coords[3]/2)*h)
+                            rx2 = int((coords[0] + coords[2]/2)*w)
+                            ry2 = int((coords[1] + coords[3]/2)*h)
+                            cv2.rectangle(mask, (rx1, ry1), (rx2, ry2), 255, -1)
+
+                        masked_img = cv2.bitwise_and(img, img, mask=mask)
+                        crop_seg = masked_img[cy1:cy2, cx1:cx2].copy()
+
+                        crop_bbox_resized = cv2.resize(crop_bbox, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                        crop_seg_resized = cv2.resize(crop_seg, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+                        bbox_crops.append(crop_bbox_resized)
+                        seg_crops.append(crop_seg_resized)
+
+                    # Build Row 1: All BBox outline crops in 1 horizontal row
+                    row1_bbox = np.hstack(bbox_crops)
+                    # Build Row 2: All Segment mask crops in 1 horizontal row
+                    row2_seg = np.hstack(seg_crops)
+
+                    # Draw vertical line separators between crops in Row 1 and Row 2
+                    curr_x = 0
+                    for crop in bbox_crops[:-1]:
+                        curr_x += crop.shape[1]
+                        cv2.line(row1_bbox, (curr_x, 0), (curr_x, target_h), (80, 80, 80), 2)
+                        cv2.line(row2_seg, (curr_x, 0), (curr_x, target_h), (80, 80, 80), 2)
+
+                    # Create horizontal green accent line separator between Row 1 and Row 2
+                    sep_line = np.zeros((4, row1_bbox.shape[1], 3), dtype=np.uint8)
+                    sep_line[:] = (50, 180, 120)
+
+                    # Stack Row 1 (BBox) and Row 2 (Segment) vertically
+                    combined_img = np.vstack([row1_bbox, sep_line, row2_seg])
+
+                    _, buf = cv2.imencode(".jpg", combined_img)
+                    b64_img = base64.b64encode(buf).decode("utf-8")
+
+                    preview_items.append({
+                        "label": f"Overlap Comparison ({' vs '.join(det_labels)})",
+                        "image": b64_img,
+                        "category": "overlap"
+                    })
         else:
             # Non-overlapping detections automatically added to output
             for det in comp:
