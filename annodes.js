@@ -756,6 +756,55 @@
     const items = Array.isArray(previewData) ? previewData : [previewData];
 
     items.forEach((item, idx) => {
+      if (typeof item === 'object' && item !== null && Array.isArray(item.items)) {
+        // Structured 2-Row rendering for Overlap Comparator conflict item cards with individual images
+        const itemWrapper = document.createElement('div');
+        itemWrapper.style.cssText = 'width: 100%; margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: rgba(10,15,26,0.5); box-sizing: border-box;';
+
+        const label = document.createElement('span');
+        label.style.cssText = `font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); color: #f87171; width: fit-content;`;
+        label.textContent = item.label || `Overlap Conflict #${idx+1}`;
+        itemWrapper.appendChild(label);
+
+        // Row 1: Crop BBox Outlines for all items side-by-side
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display: flex; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 0; background: #000; border-radius: 4px; border: 1px solid var(--border); width: 100%; box-sizing: border-box;';
+        
+        item.items.forEach((child, cIdx) => {
+          if (child.bbox_crop) {
+            const img = document.createElement('img');
+            img.style.cssText = `height: 140px; width: auto; flex: 1 1 0px; min-width: 0; object-fit: contain; display: block; ${cIdx < item.items.length - 1 ? 'border-right: 2px solid #505050;' : ''}`;
+            img.src = `data:image/jpeg;base64,${child.bbox_crop}`;
+            img.title = `${child.pin_label}: ${child.class_name}`;
+            img.draggable = false;
+            row1.appendChild(img);
+          }
+        });
+
+        // Green accent separator line
+        const sepLine = document.createElement('div');
+        sepLine.style.cssText = 'height: 4px; background: #32b478; width: 100%; margin: 2px 0; border-radius: 2px;';
+
+        // Row 2: Crop Segment Masks for all items side-by-side
+        const row2 = document.createElement('div');
+        row2.style.cssText = 'display: flex; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 0; background: #000; border-radius: 4px; border: 1px solid var(--border); width: 100%; box-sizing: border-box;';
+        
+        item.items.forEach((child, cIdx) => {
+          if (child.seg_crop) {
+            const img = document.createElement('img');
+            img.style.cssText = `height: 140px; width: auto; flex: 1 1 0px; min-width: 0; object-fit: contain; display: block; ${cIdx < item.items.length - 1 ? 'border-right: 2px solid #505050;' : ''}`;
+            img.src = `data:image/jpeg;base64,${child.seg_crop}`;
+            img.title = `${child.pin_label}: ${child.class_name}`;
+            img.draggable = false;
+            row2.appendChild(img);
+          }
+        });
+
+        itemWrapper.append(row1, sepLine, row2);
+        previewContainer.appendChild(itemWrapper);
+        return;
+      }
+
       const b64 = (typeof item === 'object' && item !== null) ? item.image : item;
       const customLabel = (typeof item === 'object' && item !== null) ? item.label : null;
 

@@ -931,22 +931,6 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                             }
                         })
 
-            # Calculate unified bounding box across ALL detections in component
-            all_boxes = []
-            for det in comp:
-                anno = det["anno"]
-                coords = anno["coords"]
-                is_seg = anno.get("is_segment", len(coords) > 4)
-                if is_seg:
-                    xs = coords[0::2]
-                    ys = coords[1::2]
-                    if len(xs) > 0 and len(ys) > 0:
-                        all_boxes.append((min(xs)*w, min(ys)*h, max(xs)*w, max(ys)*h))
-                else:
-                    if len(coords) >= 4:
-                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
-                        all_boxes.append(((xc - bw/2)*w, (yc - bh/2)*h, (xc + bw/2)*w, (yc + bh/2)*h))
-
             if all_boxes:
                 min_x = min(b[0] for b in all_boxes)
                 min_y = min(b[1] for b in all_boxes)
@@ -965,15 +949,14 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                 ch = cy2 - cy1
 
                 if cw > 0 and ch > 0:
-                    bbox_crops = []
-                    seg_crops = []
+                    item_crops = []
                     det_labels = []
 
                     target_h = 160
                     aspect = cw / float(ch)
                     target_w = max(100, int(target_h * aspect))
 
-                    for det in comp:
+                    for idx, det in enumerate(comp):
                         c_id = det["anno"]["class_id"]
                         color_hex = src_classes[c_id]["color"] if c_id < len(src_classes) else "#3b82f6"
                         c_name = src_classes[c_id]["name"] if c_id < len(src_classes) else f"Class {c_id}"
@@ -983,7 +966,7 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
 
                         det_labels.append(f"{det['pin_label']}: {c_name}")
 
-                        # A. Generate BBox Outline Crop
+                        # A. Generate BBox Outline Crop (Individual Image)
                         crop_bbox = img[cy1:cy2, cx1:cx2].copy()
                         if is_segment:
                             pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
@@ -999,7 +982,7 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                             cv2.addWeighted(overlay, 0.25, crop_bbox, 0.75, 0, crop_bbox)
                             cv2.rectangle(crop_bbox, (0, 0), (cw, ch), bgr, 2)
 
-                        # B. Generate Segment Mask Crop
+                        # B. Generate Segment Mask Crop (Individual Image)
                         mask = np.zeros((h, w), dtype=np.uint8)
                         if is_segment:
                             pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
@@ -1018,35 +1001,35 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                         crop_bbox_resized = cv2.resize(crop_bbox, (target_w, target_h), interpolation=cv2.INTER_AREA)
                         crop_seg_resized = cv2.resize(crop_seg, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-                        bbox_crops.append(crop_bbox_resized)
-                        seg_crops.append(crop_seg_resized)
+                        _, buf_bbox = cv2.imencode(".jpg", crop_bbox_resized)
+                        b64_bbox = base64.b64encode(buf_bbox).decode("utf-8")
 
-                    # Build Row 1: All BBox outline crops in 1 horizontal row
-                    row1_bbox = np.hstack(bbox_crops)
-                    # Build Row 2: All Segment mask crops in 1 horizontal row
-                    row2_seg = np.hstack(seg_crops)
+                        _, buf_seg = cv2.imencode(".jpg", crop_seg_resized)
+                        b64_seg = base64.b64encode(buf_seg).decode("utf-8")
 
-                    # Draw vertical line separators between crops in Row 1 and Row 2
-                    curr_x = 0
-                    for crop in bbox_crops[:-1]:
-                        curr_x += crop.shape[1]
-                        cv2.line(row1_bbox, (curr_x, 0), (curr_x, target_h), (80, 80, 80), 2)
-                        cv2.line(row2_seg, (curr_x, 0), (curr_x, target_h), (80, 80, 80), 2)
+                        item_crops.append({
+                            "index": idx + 1,
+                            "pin_name": det["pin_name"],
+                            "pin_label": det["pin_label"],
+                            "class_id": c_id,
+                            "class_name": c_name,
+                            "bbox_crop": b64_bbox,
+                            "seg_crop": b64_seg,
+                            "coords": coords,
+                            "is_segment": is_segment
+                        })
 
-                    # Create horizontal green accent line separator between Row 1 and Row 2
-                    sep_line = np.zeros((4, row1_bbox.shape[1], 3), dtype=np.uint8)
-                    sep_line[:] = (50, 180, 120)
-
-                    # Stack Row 1 (BBox) and Row 2 (Segment) vertically
-                    combined_img = np.vstack([row1_bbox, sep_line, row2_seg])
-
-                    _, buf = cv2.imencode(".jpg", combined_img)
-                    b64_img = base64.b64encode(buf).decode("utf-8")
+                    # Add structured conflict item list for AI decision node & preview
+                    conflict_pairs.append({
+                        "pair_id": f"conflict-{len(conflict_pairs)+1}",
+                        "action": "compare",
+                        "items": item_crops
+                    })
 
                     preview_items.append({
                         "label": f"Overlap Comparison ({' vs '.join(det_labels)})",
-                        "image": b64_img,
-                        "category": "overlap"
+                        "category": "overlap",
+                        "items": item_crops
                     })
         else:
             # Non-overlapping detections automatically added to output
