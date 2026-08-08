@@ -558,52 +558,75 @@ class AICheckEndpointRequest(BaseModel):
 def check_endpoint(payload: AICheckEndpointRequest):
     url = payload.url.strip()
     api_key = payload.api_key.strip() if payload.api_key else ""
-    
+
     if not url:
         raise HTTPException(status_code=400, detail="Endpoint URL is required")
-        
+
     headers = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-        
+
+    # --- Detect provider type from URL ---
+    is_google = "googleapis.com" in url or "generativelanguage" in url
+    is_ollama = "ollama" in url or "11434" in url
+
     try:
-        test_url = url
-        if not test_url.endswith("/models") and not test_url.endswith("/v1/models") and not test_url.endswith("/api/tags"):
-            if "ollama" in test_url or "11434" in test_url:
-                test_url = test_url.rstrip("/") + "/api/tags"
-            else:
-                test_url = test_url.rstrip("/") + "/v1/models"
-                
-        response = requests.get(test_url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=f"Endpoint returned status code {response.status_code}: {response.text}")
-            
-        data = response.json()
         models = []
-        if "data" in data and isinstance(data["data"], list):
-            for item in data["data"]:
-                if isinstance(item, dict):
-                    m_id = item.get("id") or item.get("name")
-                    if m_id:
-                        models.append(str(m_id).replace("models/", ""))
-        elif "models" in data and isinstance(data["models"], list):
-            for item in data["models"]:
-                if isinstance(item, dict):
-                    m_id = item.get("name") or item.get("id")
-                    if m_id:
-                        models.append(str(m_id).replace("models/", ""))
+
+        if is_google:
+            # Google Gemini API: GET /v1beta/models?key=API_KEY
+            base = "https://generativelanguage.googleapis.com"
+            list_url = f"{base}/v1beta/models?key={api_key}" if api_key else f"{base}/v1beta/models"
+            response = requests.get(list_url, timeout=15)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code,
+                                    detail=f"Google API returned {response.status_code}: {response.text[:300]}")
+            data = response.json()
+            # Gemini response: {"models": [{"name": "models/gemini-pro", ...}, ...]}
+            for item in data.get("models", []):
+                m_name = item.get("name", "")
+                # Only include generative models, strip "models/" prefix
+                if "gemini" in m_name.lower() or "generateContent" in str(item.get("supportedGenerationMethods", [])):
+                    models.append(m_name.replace("models/", ""))
+
+        elif is_ollama:
+            test_url = url.rstrip("/") + "/api/tags"
+            response = requests.get(test_url, timeout=10)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code,
+                                    detail=f"Ollama returned {response.status_code}: {response.text[:300]}")
+            data = response.json()
+            for item in data.get("models", []):
+                m_id = item.get("name") or item.get("id")
+                if m_id:
+                    models.append(str(m_id))
+
         else:
-            if isinstance(data, list):
+            # OpenAI-compatible: GET /v1/models with Authorization: Bearer KEY
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            test_url = url.rstrip("/")
+            if not any(test_url.endswith(s) for s in ["/models", "/v1/models"]):
+                test_url += "/v1/models"
+            response = requests.get(test_url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code,
+                                    detail=f"Endpoint returned {response.status_code}: {response.text[:300]}")
+            data = response.json()
+            if "data" in data and isinstance(data["data"], list):
+                for item in data["data"]:
+                    m_id = item.get("id") or item.get("name") if isinstance(item, dict) else item
+                    if m_id:
+                        models.append(str(m_id).replace("models/", ""))
+            elif isinstance(data, list):
                 for item in data:
-                    if isinstance(item, str):
-                        models.append(item.replace("models/", ""))
-                    elif isinstance(item, dict):
-                        m_id = item.get("id") or item.get("name")
-                        if m_id:
-                            models.append(str(m_id).replace("models/", ""))
-                        
-        models = [m for m in models if m]
-        return {"success": True, "models": sorted(list(set(models)))}
+                    m_id = (item.get("id") or item.get("name")) if isinstance(item, dict) else item
+                    if m_id:
+                        models.append(str(m_id))
+
+        models = sorted(list(set(m for m in models if m)))
+        return {"success": True, "models": models, "count": len(models)}
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to endpoint: {str(e)}")
 

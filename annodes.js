@@ -1713,6 +1713,74 @@
     }, 4000);
   };
 
+  // --- Check Endpoint Result Popup ---
+  function showCheckResultPopup(success, message, models, url) {
+    const existing = document.getElementById('check-result-popup-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'check-result-popup-overlay';
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    `;
+
+    const isGoogle = url && (url.includes('googleapis') || url.includes('generativelanguage'));
+    const providerLabel = isGoogle ? '🔵 Google Gemini' : (url && url.includes('11434') ? '🟠 Ollama' : '🟣 OpenAI-compatible');
+
+    const popup = document.createElement('div');
+    popup.style.cssText = `
+      background: var(--surface, #1a2035); border: 1px solid var(--border, #2a3552);
+      border-radius: 16px; padding: 28px 32px; min-width: 440px; max-width: 600px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+      animation: modal-slide-in 0.2s ease;
+    `;
+
+    const statusColor = success ? '#10b981' : '#ef4444';
+    const statusIcon = success
+      ? `<svg viewBox="0 0 24 24" style="width:32px;height:32px;fill:#10b981;"><path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M11,16.5L18,9.5L16.59,8.09L11,13.67L7.91,10.59L6.5,12L11,16.5Z"/></svg>`
+      : `<svg viewBox="0 0 24 24" style="width:32px;height:32px;fill:#ef4444;"><path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z"/></svg>`;
+
+    let modelsHtml = '';
+    if (success && models.length > 0) {
+      const shown = models.slice(0, 15);
+      const rest = models.length - shown.length;
+      modelsHtml = `
+        <div style="margin-top:16px;">
+          <div style="font-size:0.75rem; color:var(--text-muted,#8899aa); font-weight:600; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.05em;">Available Models</div>
+          <div style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; padding:8px; background:rgba(0,0,0,0.3); border-radius:8px; border:1px solid var(--border,#2a3552);">
+            ${shown.map(m => `<div style="font-size:0.78rem; color:#e2e8f0; padding:5px 10px; background:rgba(59,130,246,0.08); border-radius:6px; font-family:monospace;">${m}</div>`).join('')}
+            ${rest > 0 ? `<div style="font-size:0.72rem; color:var(--text-muted,#8899aa); text-align:center; padding:4px;">...and ${rest} more</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    popup.innerHTML = `
+      <div style="display:flex; align-items:center; gap:14px; margin-bottom:16px;">
+        ${statusIcon}
+        <div>
+          <div style="font-size:1rem; font-weight:700; color:${statusColor};">${success ? 'Connection Successful' : 'Connection Failed'}</div>
+          <div style="font-size:0.75rem; color:var(--text-muted,#8899aa); margin-top:2px;">${providerLabel}</div>
+        </div>
+      </div>
+      <div style="font-size:0.83rem; color:#cbd5e1; background:rgba(0,0,0,0.25); border-radius:8px; padding:10px 14px; border-left:3px solid ${statusColor};">${message}</div>
+      ${modelsHtml}
+      <div style="margin-top:20px; display:flex; justify-content:flex-end;">
+        <button id="check-popup-close" style="padding:8px 24px; background:var(--accent,#6366f1); border:none; border-radius:8px; color:#fff; font-size:0.82rem; font-weight:600; cursor:pointer;">OK</button>
+      </div>
+    `;
+
+    overlay.appendChild(popup);
+    document.body.appendChild(overlay);
+
+    const closePopup = () => overlay.remove();
+    popup.querySelector('#check-popup-close').onclick = closePopup;
+    overlay.onclick = (e) => { if (e.target === overlay) closePopup(); };
+  }
+
+
   async function uploadFileAndUpdateNode(file, nodeId) {
     if (!file || !file.type.startsWith('image/')) {
       showToast('File must be an image', 'error');
@@ -1905,13 +1973,12 @@
         const url = epUrlInput.value.trim();
         const api_key = epKeyInput.value.trim();
         if (!url) {
-          showToast('Endpoint URL is required to check.', 'error');
+          showCheckResultPopup(false, 'Endpoint URL is required', [], url);
           return;
         }
 
         checkEpBtn.disabled = true;
         checkEpBtn.textContent = 'Checking...';
-        showToast('Connecting to endpoint...', 'info');
 
         try {
           const r = await fetch('/api/ai-decision/check-endpoint', {
@@ -1922,12 +1989,14 @@
           const d = await r.json();
           if (r.ok && d.success) {
             retrievedModels = d.models || [];
-            showToast(`Success! Found ${retrievedModels.length} models. Click Save to store this endpoint and overwrite models list.`, 'success');
+            showCheckResultPopup(true, `Connected! Found ${d.count || retrievedModels.length} models.`, retrievedModels, url);
           } else {
-            showToast('Endpoint check failed: ' + (d.detail || d.error), 'error');
+            retrievedModels = [];
+            showCheckResultPopup(false, d.detail || d.error || 'Connection failed', [], url);
           }
         } catch (err) {
-          showToast('Endpoint error: ' + err.message, 'error');
+          retrievedModels = [];
+          showCheckResultPopup(false, 'Network error: ' + err.message, [], url);
         } finally {
           checkEpBtn.disabled = false;
           checkEpBtn.textContent = 'Check & Retrieve Models';
