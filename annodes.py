@@ -429,6 +429,118 @@ def save_ai_decision_config(payload: AIConfigSaveRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Pause state mapping: node_id -> bool
+_paused_queues = {}
+
+class PauseToggleRequest(BaseModel):
+    node_id: str
+    paused: bool
+
+@app.post("/api/ai-queue/pause-toggle")
+def pause_toggle(payload: PauseToggleRequest):
+    _paused_queues[payload.node_id] = payload.paused
+    return {"success": True, "paused": payload.paused}
+
+def call_vlm_api(endpoints, model_name, messages):
+    is_gemini = "gemini" in model_name.lower()
+    
+    url = ""
+    api_key = ""
+    for ep in endpoints:
+        if is_gemini and "googleapis" in ep.get("url", ""):
+            url = ep.get("url")
+            api_key = ep.get("api_key")
+            break
+            
+    if not api_key:
+        if is_gemini:
+            api_key = os.environ.get("GEMINI_API_KEY", "")
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            
+    if not url:
+        if is_gemini:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        elif endpoints:
+            url = endpoints[0].get("url", "").rstrip("/") + "/chat/completions"
+        else:
+            url = "https://api.openai.com/v1/chat/completions"
+
+    if is_gemini and "key=" not in url and api_key:
+        url = url + f"?key={api_key}"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key and not is_gemini:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    if is_gemini:
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] in ("user", "error") else "model"
+            parts = []
+            if msg.get("content"):
+                parts.append({"text": msg["content"]})
+            if msg["role"] == "user" and msg.get("images"):
+                for img_b64 in msg["images"]:
+                    parts.append({
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": img_b64
+                        }
+                    })
+            contents.append({"role": role, "parts": parts})
+            
+        payload = {"contents": contents}
+        
+        has_json = False
+        for msg in messages:
+            if msg.get("content") and "json" in msg["content"].lower():
+                has_json = True
+                break
+                
+        if has_json:
+            payload["generationConfig"] = {
+                "responseMimeType": "application/json"
+            }
+        
+        res = requests.post(url, headers=headers, json=payload, timeout=45)
+        res.raise_for_status()
+        data = res.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return text
+    else:
+        openai_messages = []
+        for msg in messages:
+            role = "user" if msg["role"] in ("user", "error") else "assistant"
+            content_list = []
+            if msg.get("content"):
+                content_list.append({"type": "text", "text": msg["content"]})
+            if msg["role"] == "user" and msg.get("images"):
+                for img_b64 in msg["images"]:
+                    content_list.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    })
+            openai_messages.append({"role": role, "content": content_list if len(content_list) > 1 else msg.get("content", "")})
+            
+        payload = {
+            "model": model_name,
+            "messages": openai_messages
+        }
+        has_json = False
+        for msg in messages:
+            if msg.get("content") and "json" in msg["content"].lower():
+                has_json = True
+                break
+        if has_json:
+            payload["response_format"] = {"type": "json_object"}
+            
+        res = requests.post(url, headers=headers, json=payload, timeout=45)
+        res.raise_for_status()
+        data = res.json()
+        text = data["choices"][0]["message"]["content"]
+        return text
+
 class AICheckEndpointRequest(BaseModel):
     url: str
     api_key: Optional[str] = None
@@ -1029,6 +1141,7 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
                             "pin_label": det["pin_label"],
                             "class_id": c_id,
                             "class_name": c_name,
+                            "image": b64_seg,
                             "bbox_crop": b64_bbox,
                             "seg_crop": b64_seg,
                             "coords": coords,
@@ -1082,6 +1195,88 @@ def process_overlap_comparator_node(node, connections_to, evaluate):
     }
 
     return processed_data, preview_items
+
+def parse_ai_choice(vlm_output: str, num_candidates: int) -> Optional[int]:
+    cleaned = vlm_output.strip()
+    try:
+        start = cleaned.find('{')
+        end = cleaned.rfind('}')
+        if start != -1 and end != -1:
+            json_str = cleaned[start:end+1]
+            data = json.loads(json_str)
+            for key in ("choice", "selected", "choice_index", "selected_index", "index", "image_index"):
+                val = data.get(key)
+                if val is not None:
+                    try:
+                        idx = int(val)
+                        if 1 <= idx <= num_candidates:
+                            return idx
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+        
+    import re
+    patterns = [
+        r"(?:choice|selected|index|image)\s*[:=]\s*(\d+)",
+        r"pilih(?: gambar)?\s*(\d+)",
+        r"image\s*(\d+)"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if match:
+            idx = int(match.group(1))
+            if 1 <= idx <= num_candidates:
+                return idx
+                
+    if cleaned.isdigit():
+        idx = int(cleaned)
+        if 1 <= idx <= num_candidates:
+            return idx
+            
+    return None
+
+def draw_resolved_annotations(img, annotations, src_classes):
+    h, w = img.shape[:2]
+    out_img = img.copy()
+    for anno in annotations:
+        c_id = anno["class_id"]
+        color_hex = src_classes[c_id]["color"] if c_id < len(src_classes) else "#3b82f6"
+        c_name = src_classes[c_id]["name"] if c_id < len(src_classes) else f"Class {c_id}"
+        bgr = hex_to_bgr(color_hex)
+        coords = anno["coords"]
+        is_segment = anno.get("is_segment", len(coords) > 4)
+        
+        lbl_x, lbl_y = 10, 10
+        if is_segment:
+            pts_px = np.array([[int(coords[j]*w), int(coords[j+1]*h)] for j in range(0, len(coords), 2)], dtype=np.int32)
+            if len(pts_px) >= 3:
+                overlay = out_img.copy()
+                cv2.fillPoly(overlay, [pts_px], bgr)
+                cv2.addWeighted(overlay, 0.3, out_img, 0.7, 0, out_img)
+                cv2.polylines(out_img, [pts_px], True, bgr, 2)
+                min_y_idx = np.argmin(pts_px[:, 1])
+                lbl_x = int(pts_px[min_y_idx][0])
+                lbl_y = int(pts_px[min_y_idx][1])
+        else:
+            if len(coords) >= 4:
+                xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                x1 = int((xc - bw/2)*w)
+                y1 = int((yc - bh/2)*h)
+                x2 = int((xc + bw/2)*w)
+                y2 = int((yc + bh/2)*h)
+                overlay = out_img.copy()
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                cv2.addWeighted(overlay, 0.3, out_img, 0.7, 0, out_img)
+                cv2.rectangle(out_img, (x1, y1), (x2, y2), bgr, 2)
+                lbl_x, lbl_y = x1, y1
+                
+        lbl_txt = f"{c_name}"
+        (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.rectangle(out_img, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+        cv2.putText(out_img, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        
+    return out_img
 
 @app.post("/api/run-flow")
 def run_flow(payload: RunFlowRequest):
@@ -1333,13 +1528,13 @@ def run_flow(payload: RunFlowRequest):
                                 except ValueError:
                                     pass
 
-                    # 3. Direct index fallback: if raw cls_id fits into src_classes (0..len-1)
-                    if mapped_class_id is None:
-                        if cls_id < len(src_classes):
-                            mapped_class_id = cls_id
-                            target_class_name = src_classes[cls_id]["name"]
-                            target_color = src_classes[cls_id]["color"]
-                        else:
+                    # If Class input is connected, only include detections with valid class bindings
+                    if class_source:
+                        if mapped_class_id is None:
+                            continue
+                    else:
+                        # Fallback if no Class node is connected at all
+                        if mapped_class_id is None:
                             mapped_class_id = cls_id
                             if cls_id < len(yolo.names):
                                 target_class_name = yolo.names[cls_id]
@@ -1766,31 +1961,295 @@ def run_flow(payload: RunFlowRequest):
         elif node["type"] == "ai_decision":
             event_queue.put({"type": "start", "node_id": node_id})
             
-            # Passthrough image if available
-            img_source = connections_to.get((node_id, "image"))
-            preview_b64 = ""
-            src_image_path = None
-            if img_source:
-                try:
-                    src_image_path = evaluate(img_source[0], img_source[1])
-                    img = cv2.imread(src_image_path)
-                    if img is not None:
-                        # Draw warning text on the image
-                        cv2.putText(img, "AI DECISION (BELUM READY)", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
-                        _, buffer = cv2.imencode(".jpg", img)
-                        preview_b64 = base64.b64encode(buffer).decode("utf-8")
-                except Exception:
-                    pass
+            worker_input_src = connections_to.get((node_id, "worker_input"))
+            if not worker_input_src:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="AI Decision node: worker_input input is missing connection.")
+                
+            worker_input_key = (worker_input_src[0], worker_input_src[1])
+            with cache_lock:
+                worker_payload = eval_cache.get(worker_input_key)
+                
+            if worker_payload is None:
+                worker_payload = evaluate(worker_input_src[0], worker_input_src[1])
+
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM ai_decision_config WHERE key = 'endpoints'")
+            endpoints_row = cursor.fetchone()
+            cursor.execute("SELECT value FROM ai_decision_config WHERE key = 'models'")
+            models_row = cursor.fetchone()
+            conn.close()
             
-            log_html = '<div style="color:#ef4444; font-weight:bold;">[BELUM READY] AI Decision Node evaluation logic is currently not implemented. Endpoints and models management is fully functional.</div>'
+            endpoints = json.loads(endpoints_row[0]) if endpoints_row else []
+            model_name = node["properties"].get("model", "").strip()
+            if not model_name:
+                model_name = "gemini-1.5-flash"
+                
+            messages = worker_payload.get("history", [])
             
+            try:
+                response_text = call_vlm_api(endpoints, model_name, messages)
+            except Exception as ex:
+                response_text = f"Error calling VLM API: {str(ex)}"
+                
+            with cache_lock:
+                eval_cache[(node_id, "worker_output")] = response_text
+                
+            event_queue.put({"type": "end", "node_id": node_id})
+            
+            updated_history = list(messages)
+            updated_history.append({"role": "assistant", "content": response_text})
+            
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, nodes FROM canvas_tabs WHERE is_active = 1 LIMIT 1")
+                tab_row = cursor.fetchone()
+                if tab_row:
+                    tab_id, nodes_json = tab_row[0], tab_row[1]
+                    nodes_list = json.loads(nodes_json)
+                    for n in nodes_list:
+                        if n["id"] == node_id:
+                            n["properties"]["last_chat_history"] = updated_history
+                            break
+                    cursor.execute("UPDATE canvas_tabs SET nodes = ? WHERE id = ?", (json.dumps(nodes_list), tab_id))
+                    conn.commit()
+                conn.close()
+            except Exception:
+                pass
+                
+            event_queue.put({
+                "type": "chat_history_update",
+                "node_id": node_id,
+                "chat_history": updated_history
+            })
+            
+            return response_text
+
+        # 5b. AI Queueing Node
+        elif node["type"] == "ai_queueing":
+            event_queue.put({"type": "start", "node_id": node_id})
+            
+            img_src = connections_to.get((node_id, "image"))
+            if not img_src:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="AI Queueing node: image input is missing connection.")
+            src_image_path = evaluate(img_src[0], img_src[1])
+            img = cv2.imread(src_image_path)
+            if img is None:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="AI Queueing node: Failed to load image.")
+            h, w = img.shape[:2]
+
+            proc_src = connections_to.get((node_id, "processed_annotation"))
+            if not proc_src:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="AI Queueing node: processed_annotation input is missing connection.")
+            processed_ann = evaluate(proc_src[0], proc_src[1])
+
+            orig_src = connections_to.get((node_id, "original_annotate"))
+            original_annotations = []
+            if orig_src:
+                original_annotations = evaluate(orig_src[0], orig_src[1])
+
+            src_classes = []
+            for n in nodes.values():
+                if n["type"] in ("single_image", "folder"):
+                    src_classes = n["properties"].get("classes", [])
+                    if src_classes:
+                        break
+
+            conflict_pairs = processed_ann.get("conflict_pairs", [])
+            resolved_annotations = list(processed_ann.get("resolved_annotations", []))
+            failed_annotations = []
+            
+            active_workers = []
+            for (to_nid, to_pin), (from_nid, from_pin) in connections_to.items():
+                if from_nid == node_id and from_pin.startswith("worker_input_"):
+                    try:
+                        w_idx = int(from_pin.replace("worker_input_", ""))
+                        active_workers.append((w_idx, to_nid, to_pin))
+                    except ValueError:
+                        pass
+            
+            if not active_workers:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="AI Queueing node: Hubungkan setidaknya satu worker (AI Decision) terlebih dahulu.")
+                
+            active_workers.sort()
+            max_retries = node["properties"].get("max_retries", 3)
+            
+            K = len(conflict_pairs)
+            for k, cp in enumerate(conflict_pairs):
+                while _paused_queues.get(node_id, False):
+                    event_queue.put({
+                        "type": "node_state_update",
+                        "node_id": node_id,
+                        "properties": {
+                            "paused": True,
+                            "last_logs": f'<div style="color:#f59e0b; font-weight:bold;">[PAUSED] Queue paused at conflict {k+1}/{K}. click Resume to continue.</div>'
+                        }
+                    })
+                    time.sleep(0.5)
+                    
+                w_idx, w_nid, w_pin = active_workers[k % len(active_workers)]
+                
+                worker_node = nodes.get(w_nid)
+                global_rules = worker_node["properties"].get("global_rules", "")
+                class_rules = worker_node["properties"].get("class_rules", {})
+                
+                available_classes_str = ", ".join(f"[{i}: {c['name']}]" for i, c in enumerate(src_classes))
+                if not available_classes_str:
+                    available_classes_str = "[0: car], [1: truck], [2: bus]"
+                    
+                class_rules_str = ""
+                if class_rules:
+                    class_rules_str = "\n".join(f"- Rule '{rule_txt}' -> Target: {src_classes[int(c_idx)]['name'] if int(c_idx) < len(src_classes) else c_idx}" for rule_txt, c_idx in class_rules.items())
+                else:
+                    class_rules_str = "- (None)"
+                    
+                image_input_str = "\n".join(f"image {item['index']}: {item['class_name']}" for item in cp["items"])
+                
+                prompt = global_rules
+                if "{class_rules}" in prompt:
+                    prompt = prompt.replace("{class_rules}", class_rules_str)
+                if "{class}" in prompt:
+                    prompt = prompt.replace("{class}", available_classes_str)
+                if "{image_input}" in prompt:
+                    prompt = prompt.replace("{image_input}", image_input_str)
+                else:
+                    prompt += f"\n\nClass Rules:\n{class_rules_str}\n\nAvailable Classes:\n{available_classes_str}\n\nImage Inputs:\n{image_input_str}"
+                
+                candidate_images = [item["image"] for item in cp["items"]]
+                
+                messages = [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": candidate_images
+                    }
+                ]
+                
+                choice = None
+                for attempt in range(max_retries):
+                    progress_pct = int((k / K) * 100) if K > 0 else 100
+                    status_log = f'<div style="color:#38bdf8;">Resolving conflict {k+1}/{K} ({progress_pct}%) - Attempt {attempt+1}/{max_retries}...</div>'
+                    
+                    event_queue.put({
+                        "type": "node_state_update",
+                        "node_id": node_id,
+                        "properties": {
+                            "is_processing": True,
+                            "last_logs": status_log
+                        }
+                    })
+                    event_queue.put({
+                        "type": "node_state_update",
+                        "node_id": w_nid,
+                        "properties": {
+                            "is_processing": True
+                        }
+                    })
+                    
+                    payload_key = (node_id, f"worker_input_{w_idx}")
+                    with cache_lock:
+                        eval_cache[payload_key] = {
+                            "conflict_pair": cp,
+                            "global_rules": global_rules,
+                            "history": list(messages)
+                        }
+                        if (w_nid, "worker_output") in eval_cache:
+                            del eval_cache[(w_nid, "worker_output")]
+                            
+                    try:
+                        vlm_output = evaluate(w_nid, "worker_output")
+                    except Exception as ex:
+                        vlm_output = f"Error during execution: {str(ex)}"
+                        
+                    event_queue.put({
+                        "type": "node_state_update",
+                        "node_id": w_nid,
+                        "properties": {
+                            "is_processing": False
+                        }
+                    })
+                    
+                    messages.append({"role": "assistant", "content": vlm_output})
+                    
+                    parsed_choice = parse_ai_choice(vlm_output, len(cp["items"]))
+                    if parsed_choice is not None:
+                        choice = parsed_choice
+                        event_queue.put({
+                            "type": "chat_history_update",
+                            "node_id": w_nid,
+                            "chat_history": list(messages)
+                        })
+                        break
+                    else:
+                        err_msg = f"Failed to parse selection. Output must be a valid JSON containing a 'choice' key indicating an integer index from 1 to {len(cp['items'])}."
+                        messages.append({"role": "error", "content": err_msg})
+                        event_queue.put({
+                            "type": "chat_history_update",
+                            "node_id": w_nid,
+                            "chat_history": list(messages)
+                        })
+                        
+                if choice is not None:
+                    selected_item = cp["items"][choice - 1]
+                    resolved_annotations.append({
+                        "class_id": selected_item["class_id"],
+                        "coords": selected_item["coords"],
+                        "is_segment": selected_item["is_segment"],
+                        "confidence": selected_item.get("confidence", 1.0)
+                    })
+                else:
+                    for item in cp["items"]:
+                        failed_annotations.append({
+                            "class_id": item["class_id"],
+                            "coords": item["coords"],
+                            "is_segment": item["is_segment"],
+                            "confidence": item.get("confidence", 1.0)
+                        })
+                        
+            final_resolved = resolved_annotations
+            
+            preview_img = draw_resolved_annotations(img, final_resolved, src_classes)
+            _, buffer = cv2.imencode(".jpg", preview_img)
+            preview_b64 = base64.b64encode(buffer).decode("utf-8")
+            
+            log_html = f'<div style="color:#34d399; font-weight:bold;">Queue finished! Resolved {len(final_resolved)} annotations.</div>'
+            if failed_annotations:
+                log_html += f'<div style="color:#ef4444; font-weight:bold;">{len(failed_annotations)} annotations failed to resolve and routed to failed output.</div>'
+                
             with cache_lock:
                 previews[node_id] = preview_b64
                 logs[node_id] = log_html
-                if src_image_path:
-                    eval_cache[(node_id, "image")] = src_image_path
                 
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "annotation")] = final_resolved
+                eval_cache[(node_id, "failed_image")] = src_image_path
+                eval_cache[(node_id, "failed_annotation")] = failed_annotations
+                
+            event_queue.put({
+                "type": "node_state_update",
+                "node_id": node_id,
+                "properties": {
+                    "is_processing": False,
+                    "paused": False,
+                    "last_logs": log_html,
+                    "last_preview": preview_b64
+                }
+            })
+            
             event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": preview_b64,
+                "logs": log_html
+            })
+            return eval_cache[cache_key]
         # 6. Overlap Comparator Node
         elif node["type"] == "overlap_comparator":
             event_queue.put({"type": "start", "node_id": node_id})

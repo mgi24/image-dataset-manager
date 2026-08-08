@@ -482,20 +482,26 @@
         };
       } else if (type === 'ai_decision') {
         properties = {
-          input_pins: ['image', 'class', 'annotation1', 'annotation2'],
           model: '',
           class_rules: {
             'semua mobil kecil, minibus, termasuk mobil bak terbuka, kecualikan mobil dengan box bak tertutup.': '0'
           },
           global_rules: 'anda adalah manager dataset yang bertugas decide hasil dari deteksi sudah benar atau belum, compare mana yang bagus maskingnya, output json.',
           global_rules_height: 90,
-          prompt_preview_height: 140,
-          logs_height: 60,
           node_width: null,
+          last_chat_history: [],
+          chat_height: 250
+        };
+      } else if (type === 'ai_queueing') {
+        properties = {
+          worker_count: 1,
+          max_retries: 3,
+          paused: false,
           last_preview: null,
           last_logs: null,
           preview_width: 320,
-          preview_height: 240
+          preview_height: 180,
+          logs_height: 60
         };
       } else if (type === 'pointer') {
         properties = {
@@ -585,6 +591,12 @@
         label.textContent += ' (opt)';
         label.style.opacity = '0.6';
       }
+      if (node.properties.is_processing && (pin.name.startsWith('worker_output_') || pin.name === 'worker_input')) {
+        const pinSpinner = document.createElement('span');
+        pinSpinner.className = 'processing-spinner';
+        pinSpinner.style.cssText = 'width:6px; height:6px; border:1.5px solid var(--accent); border-top-color:transparent; border-radius:50%; display:inline-block; margin-left:6px; vertical-align:middle;';
+        label.appendChild(pinSpinner);
+      }
 
       row.append(pinEl, label);
 
@@ -645,6 +657,12 @@
       const label = document.createElement('span');
       label.className = 'pin-label';
       label.textContent = pin.label;
+      if (node.properties.is_processing && (pin.name.startsWith('worker_input_') || pin.name === 'worker_output')) {
+        const pinSpinner = document.createElement('span');
+        pinSpinner.className = 'processing-spinner';
+        pinSpinner.style.cssText = 'width:6px; height:6px; border:1.5px solid var(--accent); border-top-color:transparent; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle;';
+        label.prepend(pinSpinner);
+      }
 
       const pinEl = document.createElement('div');
       pinEl.className = 'pin pin-out';
@@ -660,6 +678,46 @@
       row.append(label, pinEl);
       outCol.appendChild(row);
     });
+
+    if (node.type === 'ai_queueing') {
+      const addRow = document.createElement('div');
+      addRow.className = 'pin-row';
+      addRow.style.cssText = 'padding: 2px 4px; display: flex; gap: 4px; justify-content: flex-end; width: 100%; box-sizing: border-box;';
+      
+      const addBtn = document.createElement('button');
+      addBtn.textContent = '+ Add Worker';
+      addBtn.className = 'btn btn-secondary';
+      addBtn.style.cssText = 'font-size: 0.65rem; padding: 2px 6px; line-height: 1; border-radius: 4px;';
+      addBtn.onclick = (e) => {
+        e.stopPropagation();
+        node.properties.worker_count = (node.properties.worker_count || 1) + 1;
+        saveCanvas();
+        refreshNodeDOM(node);
+      };
+
+      addRow.appendChild(addBtn);
+
+      if ((node.properties.worker_count || 1) > 1) {
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕';
+        delBtn.className = 'btn btn-secondary';
+        delBtn.style.cssText = 'font-size: 0.65rem; padding: 2px 6px; line-height: 1; border-radius: 4px; color: #ef4444;';
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          const wIdx = node.properties.worker_count || 1;
+          _connections = _connections.filter(c => 
+            !(c.fromNodeId === node.id && c.fromPinName === `worker_input_${wIdx}`) &&
+            !(c.toNodeId === node.id && c.toPinName === `worker_output_${wIdx}`)
+          );
+          node.properties.worker_count = wIdx - 1;
+          saveCanvas();
+          refreshNodeDOM(node);
+        };
+        addRow.appendChild(delBtn);
+      }
+
+      outCol.appendChild(addRow);
+    }
 
     container.append(inCol, outCol);
     return container;
@@ -1581,18 +1639,14 @@
       body.appendChild(previewContainer);
       setTimeout(() => renderPreviewContent(node.id, node.properties.last_preview), 0);
     } else if (node.type === 'ai_decision') {
-      const inputPins = node.properties.input_pins || ['image', 'class', 'annotation1', 'annotation2'];
-      if (!inputPins.includes('class')) {
-        const idx = inputPins.indexOf('image');
-        inputPins.splice(idx !== -1 ? idx + 1 : 1, 0, 'class');
-        node.properties.input_pins = inputPins;
-      }
-      const pins_in = inputPins.map(name => {
-        let label = name === 'image' ? 'Image' : (name === 'class' ? 'Class' : `Annotation ${name.replace('annotation', '')}`);
-        let optional = name === 'class';
-        return { name, label, optional };
-      });
-      const pins = createPinsLayout(node, pins_in, []);
+      const pins = createPinsLayout(node, 
+        [
+          { name: 'worker_input', label: 'Worker Input' }
+        ],
+        [
+          { name: 'worker_output', label: 'Worker Output' }
+        ]
+      );
       body.appendChild(pins);
 
       // Model selector with settings gear button
@@ -1749,11 +1803,112 @@
 
       body.appendChild(globalGroup);
 
+      // Resizable Chat History Console
+      const chatContainer = document.createElement('div');
+      chatContainer.className = 'ai-chat-container resizable-box';
+      chatContainer.id = `chat-container-${node.id}`;
+      chatContainer.style.cssText = `height:${node.properties.chat_height || 250}px; overflow-y:auto;`;
+      
+      if (node.properties.preview_width) {
+        chatContainer.style.width = node.properties.preview_width + 'px';
+      }
+      chatContainer.onmouseup = () => {
+        if (chatContainer.clientHeight) {
+          node.properties.chat_height = chatContainer.clientHeight;
+        }
+        if (chatContainer.clientWidth) {
+          node.properties.preview_width = chatContainer.clientWidth;
+        }
+        saveCanvas();
+      };
+      
+      body.appendChild(chatContainer);
+      setTimeout(() => {
+        renderChatHistory(node.id);
+        refreshAiDecisionRules(node.id);
+      }, 0);
+    } else if (node.type === 'ai_queueing') {
+      const wCount = node.properties.worker_count || 1;
+      const inputs = [
+        { name: 'image', label: 'Image' },
+        { name: 'processed_annotation', label: 'Processed annotation' },
+        { name: 'original_annotate', label: 'Original annotate', optional: true }
+      ];
+      for (let i = 1; i <= wCount; i++) {
+        inputs.push({ name: `worker_output_${i}`, label: `Worker Output ${i}` });
+      }
+
+      const outputs = [
+        { name: 'image', label: 'Image' },
+        { name: 'annotation', label: 'Annotation' },
+        { name: 'failed_image', label: 'Failed Image' },
+        { name: 'failed_annotation', label: 'Failed Annotation' }
+      ];
+      for (let i = 1; i <= wCount; i++) {
+        outputs.push({ name: `worker_input_${i}`, label: `Worker Input ${i}` });
+      }
+
+      const pins = createPinsLayout(node, inputs, outputs);
+      body.appendChild(pins);
+
+      // Warning label below original_annotate
+      const warningText = document.createElement('div');
+      warningText.style.cssText = 'color:#f87171; font-size:0.62rem; padding: 2px 8px; line-height: 1.25; margin-bottom: 6px; font-style: italic; border-left: 2px solid #ef4444; background: rgba(239, 68, 68, 0.08); border-radius: 3px;';
+      warningText.textContent = 'Warning: Hanya connect original annotate ke node input (jika ada)';
+      body.appendChild(warningText);
+
+      // Pause / Resume and settings row
+      const ctrlGroup = document.createElement('div');
+      ctrlGroup.className = 'field-group';
+      ctrlGroup.style.cssText = 'display:flex; flex-direction:column; gap:6px; border:1px solid var(--border); border-radius:6px; padding:8px; background:rgba(255,255,255,0.02);';
+      
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+      
+      const pauseBtn = document.createElement('button');
+      pauseBtn.className = 'btn';
+      pauseBtn.style.cssText = 'flex:1; padding:4px 10px; font-size:0.75rem; display:flex; align-items:center; justify-content:center; gap:6px; font-weight:700;';
+      if (node.properties.paused) {
+        pauseBtn.innerHTML = '🟢 Resume';
+        pauseBtn.style.background = '#10b981';
+      } else {
+        pauseBtn.innerHTML = '⏸️ Pause';
+        pauseBtn.style.background = '#ef4444';
+      }
+      pauseBtn.onclick = async (e) => {
+        e.preventDefault();
+        node.properties.paused = !node.properties.paused;
+        await saveCanvas();
+        try {
+          await fetch('/api/ai-queue/pause-toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ node_id: node.id, paused: node.properties.paused })
+          });
+        } catch (err) {
+          console.warn('Failed to sync pause toggle:', err);
+        }
+        refreshNodeDOM(node);
+      };
+
+      btnRow.appendChild(pauseBtn);
+      
+      // Retries input
+      const retriesRow = createInputField('Max Retries', 'number', node.properties.max_retries || 3, (v) => {
+        node.properties.max_retries = parseInt(v) || 3;
+        saveCanvas();
+      });
+      retriesRow.style.cssText = 'flex:1.2; margin:0;';
+      
+      btnRow.appendChild(retriesRow);
+      ctrlGroup.appendChild(btnRow);
+      body.appendChild(ctrlGroup);
+
       // Resizable Preview frame
       const previewContainer = document.createElement('div');
       previewContainer.className = 'preview-container resizable-box';
       previewContainer.id = `preview-container-${node.id}`;
-      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start;';
+      previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start; margin-top: 6px;';
       if (node.properties.preview_width) {
         previewContainer.style.width = node.properties.preview_width + 'px';
       }
@@ -1761,15 +1916,22 @@
         previewContainer.style.height = node.properties.preview_height + 'px';
       }
       previewContainer.onmouseup = () => {
-        node.properties.preview_width = previewContainer.clientWidth;
-        node.properties.preview_height = previewContainer.clientHeight;
+        if (previewContainer.clientHeight) {
+          node.properties.preview_height = previewContainer.clientHeight;
+        }
+        if (previewContainer.clientWidth) {
+          node.properties.preview_width = previewContainer.clientWidth;
+        }
         saveCanvas();
       };
       
+      body.appendChild(previewContainer);
+
+      // Logs console
       const logsConsole = document.createElement('div');
       logsConsole.className = 'yolo-logs-console';
       logsConsole.id = `yolo-logs-${node.id}`;
-      logsConsole.style.cssText = 'height:60px; font-family:monospace; font-size:0.7rem; background:#070a13; border:1px solid var(--border); border-radius:6px; padding:6px; color:#ef4444; overflow-y:auto; box-sizing:border-box; margin-top:4px; font-weight:normal; line-height:1.2; resize:vertical;';
+      logsConsole.style.cssText = 'height:60px; font-family:monospace; font-size:0.7rem; background:#070a13; border:1px solid var(--border); border-radius:6px; padding:6px; color:#34d399; overflow-y:auto; box-sizing:border-box; margin-top:4px; font-weight:normal; line-height:1.2; resize:vertical;';
       if (node.properties.logs_height) {
         logsConsole.style.height = node.properties.logs_height + 'px';
         logsConsole.style.maxHeight = 'none';
@@ -1782,10 +1944,10 @@
       };
       logsConsole.innerHTML = node.properties.last_logs || '<div style="color:var(--text-muted);">No logs available. Run flow to see output.</div>';
       
-      body.append(previewContainer, logsConsole);
+      body.appendChild(logsConsole);
+      
       setTimeout(() => {
         renderPreviewContent(node.id, node.properties.last_preview);
-        refreshAiDecisionRules(node.id);
       }, 0);
     } else if (node.type === 'pointer') {
       const pins = createPinsLayout(node, 
@@ -2304,6 +2466,71 @@
     const node = _nodes.find(n => n.id === nodeId);
     if (!node) return;
     previewBox.textContent = generateAiPromptPreviewText(node);
+  }
+
+  function renderChatHistory(nodeId) {
+    const container = document.getElementById(`chat-container-${nodeId}`);
+    if (!container) return;
+
+    const node = _nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    const history = node.properties.last_chat_history || [];
+    container.innerHTML = '';
+
+    if (history.length === 0) {
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'color:var(--text-muted); font-size:0.75rem; text-align:center; padding:20px; font-style:italic;';
+      placeholder.textContent = 'Belum ada riwayat percakapan AI.';
+      container.appendChild(placeholder);
+      return;
+    }
+
+    history.forEach(msg => {
+      const bubble = document.createElement('div');
+      bubble.className = `chat-bubble ${msg.role || 'assistant'}`;
+      bubble.style.marginBottom = '8px';
+
+      const label = document.createElement('span');
+      label.className = 'chat-bubble-label';
+      label.textContent = msg.role === 'user' ? 'Prompt' : (msg.role === 'error' ? 'Parsing Error Report' : 'AI Assistant');
+      bubble.appendChild(label);
+
+      // Handle text content
+      const txt = document.createElement('div');
+      txt.style.cssText = 'white-space:pre-wrap; word-break:break-word;';
+      txt.textContent = msg.content || '';
+      bubble.appendChild(txt);
+
+      // Handle images (e.g. side-by-side comparison images for 'user' bubble)
+      if (msg.role === 'user' && Array.isArray(msg.images) && msg.images.length > 0) {
+        const row = document.createElement('div');
+        row.className = 'chat-candidate-row';
+
+        msg.images.forEach((imgB64, idx) => {
+          const item = document.createElement('div');
+          item.className = 'chat-candidate-item';
+
+          const img = document.createElement('img');
+          img.className = 'chat-candidate-img';
+          img.src = `data:image/jpeg;base64,${imgB64}`;
+          img.draggable = false;
+
+          const num = document.createElement('span');
+          num.className = 'chat-candidate-num';
+          num.textContent = `Image ${idx + 1}`; // index 1 dimulai dari kiri!
+
+          item.append(img, num);
+          row.appendChild(item);
+        });
+        bubble.appendChild(row);
+      }
+
+      container.appendChild(bubble);
+    });
+
+    // Auto-scroll to bottom
+    container.scrollTop = container.scrollHeight;
   }
 
   async function refreshAiDecisionRules(nodeId) {
@@ -2934,6 +3161,22 @@
         
         saveCanvas();
       }
+    } else if (ev.type === 'chat_history_update') {
+      const nodeId = ev.node_id;
+      const node = _nodes.find(n => n.id === nodeId);
+      if (node) {
+        node.properties.last_chat_history = ev.chat_history;
+        saveCanvas();
+        renderChatHistory(nodeId);
+      }
+    } else if (ev.type === 'node_state_update') {
+      const nodeId = ev.node_id;
+      const node = _nodes.find(n => n.id === nodeId);
+      if (node) {
+        Object.assign(node.properties, ev.properties);
+        saveCanvas();
+        refreshNodeDOM(node);
+      }
     } else if (ev.type === 'done') {
       const statusText = ev.is_folder_mode ? `Folder Image ${ev.current_index + 1}/${ev.total_images}: ${ev.filename}` : `Completed: ${ev.filename || 'Flow Done'}`;
       updateFlowProgress(100, statusText);
@@ -2976,10 +3219,18 @@
           previewPlaceholder.textContent = 'Memproses...';
         }
       } else {
-        // Multi-card container nodes (preview, overlap_comparator, ai_decision)
+        // Multi-card container nodes (preview, overlap_comparator, ai_decision, ai_queueing)
         const previewContainer = document.getElementById(`preview-container-${n.id}`);
         if (previewContainer) {
           previewContainer.innerHTML = '<span class="preview-placeholder">Memproses...</span>';
+        }
+        
+        if (n.type === 'ai_decision') {
+          n.properties.last_chat_history = [];
+          const chatContainer = document.getElementById(`chat-container-${n.id}`);
+          if (chatContainer) {
+            chatContainer.innerHTML = '<span class="preview-placeholder">Memproses...</span>';
+          }
         }
       }
 

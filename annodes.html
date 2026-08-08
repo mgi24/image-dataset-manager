@@ -965,7 +965,97 @@
     .log-line-start { color: #38bdf8; }
     .log-line-success { color: #34d399; }
     .log-line-error { color: #f87171; font-weight: bold; background: rgba(239, 68, 68, 0.15); padding: 2px 4px; border-radius: 3px; }
-    .log-line-info { color: #94a3b8; }
+     .log-line-info { color: #94a3b8; }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .processing-spinner {
+      animation: spin 0.8s linear infinite;
+    }
+
+    /* AI Chat Console Styles */
+    .ai-chat-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: #060912;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      overflow-y: auto;
+      box-sizing: border-box;
+      font-size: 0.76rem;
+      line-height: 1.35;
+    }
+    .chat-bubble {
+      max-width: 85%;
+      padding: 8px 12px;
+      border-radius: 12px;
+      word-wrap: break-word;
+      font-family: inherit;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: linear-gradient(135deg, var(--accent) 0%, #7c3aed 100%);
+      color: #ffffff;
+      border-bottom-right-radius: 2px;
+    }
+    .chat-bubble.assistant {
+      align-self: flex-start;
+      background: #111827;
+      border: 1px solid var(--border);
+      color: #f3f4f6;
+      border-bottom-left-radius: 2px;
+    }
+    .chat-bubble.error {
+      align-self: flex-end;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      border-bottom-right-radius: 2px;
+    }
+    .chat-bubble-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      opacity: 0.75;
+      margin-bottom: 4px;
+      display: block;
+    }
+    .chat-candidate-row {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      gap: 6px;
+      overflow-x: auto;
+      margin-top: 6px;
+      background: rgba(0,0,0,0.4);
+      padding: 4px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .chat-candidate-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      flex: 0 0 auto;
+    }
+    .chat-candidate-img {
+      height: 90px;
+      width: auto;
+      display: block;
+      border-radius: 4px;
+      border: 1.5px solid #4b5563;
+      object-fit: contain;
+    }
+    .chat-candidate-num {
+      font-size: 0.62rem;
+      font-weight: 700;
+      color: #9ca3af;
+    }
 
     .modal-overlay {
       position: fixed;
@@ -1122,6 +1212,12 @@
               <path d="M12,2C6.5,2 2,6.5 2,12C2,17.5 6.5,22 12,22C17.5,22 22,17.5 22,12C22,6.5 17.5,2 12,2M12,20C7.6,20 4,16.4 4,12C4,7.6 7.6,4 12,4C16.4,4 20,7.6 20,12C20,16.4 16.4,20 12,20M13,7H11V9H13V7M13,11H11V17H13V11Z"/>
             </svg>
             AI Decision
+          </div>
+          <div class="node-template-btn" data-type="ai_queueing">
+            <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:currentColor">
+              <path d="M4,15H20V19H4V15M4,9H20V13H4V9M4,3H20V7H4V3Z"/>
+            </svg>
+            AI Queueing
           </div>
         </div>
       </div>
