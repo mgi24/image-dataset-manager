@@ -554,6 +554,23 @@
     refreshAllYoloBindings();
   }
 
+  function duplicateNode(nodeId) {
+    const srcNode = _nodes.find(n => n.id === nodeId);
+    if (!srcNode) return;
+    
+    const clonedProps = JSON.parse(JSON.stringify(srcNode.properties));
+    clonedProps.last_chat_history = [];
+    clonedProps.last_preview = null;
+    clonedProps.last_logs = null;
+    clonedProps.is_processing = false;
+    clonedProps.paused = false;
+
+    createNode(srcNode.type, srcNode.x + 40, srcNode.y + 40, {
+      id: 'node-' + Date.now() + '-' + Math.floor(Math.random()*1000),
+      properties: clonedProps
+    });
+  }
+
   function refreshNodeDOM(node) {
     const oldEl = document.getElementById(node.id);
     if (!oldEl) return;
@@ -618,7 +635,7 @@
       inCol.appendChild(row);
     });
 
-    if (node.type === 'overlap_comparator' || node.type === 'ai_decision') {
+    if (node.type === 'overlap_comparator') {
       const addRow = document.createElement('div');
       addRow.className = 'pin-row';
       addRow.style.cssText = 'padding: 2px 4px;';
@@ -985,6 +1002,22 @@
         runFlowFromInputNode(node.id);
       };
       rightControls.appendChild(runBtn);
+    }
+
+    if (node.type === 'ai_decision') {
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'node-close-btn';
+      copyBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;vertical-align:middle;">
+          <path d="M16,20H8V6H16M16,4H8C6.89,4 6,4.89 6,6V20C6,21.1 6.89,22 8,22H16C17.1,22 18,21.1 18,20V6C18,4.89 17.1,4 16,4M20,8V2H4V18H6V4H18V8H20Z"/>
+        </svg>
+      `;
+      copyBtn.title = 'Salin (Duplicate) Node';
+      copyBtn.onclick = (e) => {
+        e.stopPropagation();
+        duplicateNode(node.id);
+      };
+      rightControls.appendChild(copyBtn);
     }
 
     const closeBtn = document.createElement('button');
