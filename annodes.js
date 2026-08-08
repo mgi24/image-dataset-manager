@@ -909,6 +909,8 @@
     el.id = node.id;
     el.className = `node ${node.type}`;
     if (_selectedNodeId === node.id) el.classList.add('selected');
+    // Restore persistent error state if node had an error
+    if (node.properties._has_error) el.classList.add('error-state');
     el.style.left = node.x + 'px';
     el.style.top = node.y + 'px';
     el.onclick = () => selectNode(node.id);
@@ -1434,6 +1436,13 @@
       const nodeEl = document.getElementById(ev.node_id);
       if (nodeEl) {
         nodeEl.classList.add('processing-glow');
+        // Clear error state when node is retried
+        nodeEl.classList.remove('error-state');
+        const node = _nodes.find(n => n.id === ev.node_id);
+        if (node) {
+          delete node.properties._has_error;
+          delete node.properties._error_message;
+        }
       }
       const n = _nodes.find(node => node.id === ev.node_id);
       const nodeTitle = n ? `${n.type.toUpperCase()} (${ev.node_id})` : ev.node_id;
@@ -1523,6 +1532,20 @@
     } else if (ev.type === 'error') {
       appendFlowLogLine(`[ERROR] ${ev.message}`, 'error');
       showToast(ev.message || 'Terjadi kesalahan saat memproses flow.', 'error');
+      // If we know which node errored, mark it red
+      if (ev.node_id) {
+        const nodeEl = document.getElementById(ev.node_id);
+        if (nodeEl) {
+          nodeEl.classList.remove('processing-glow');
+          nodeEl.classList.add('error-state');
+        }
+        // Persist error state on the node so it survives re-renders
+        const node = _nodes.find(n => n.id === ev.node_id);
+        if (node) {
+          node.properties._has_error = true;
+          node.properties._error_message = ev.message;
+        }
+      }
     }
   }
 
@@ -1538,11 +1561,16 @@
     // Auto save layout before execution
     await saveCanvas();
 
-    // Clear old previews and logs of target nodes before running
+    // Clear old previews, logs, and error states of target nodes before running
     const targetNodes = runOnlyNodes ? _nodes.filter(n => runOnlyNodes.includes(n.id)) : _nodes;
     targetNodes.forEach(n => {
       n.properties.last_preview = null;
       n.properties.last_logs = null;
+      // Clear error state for fresh run
+      delete n.properties._has_error;
+      delete n.properties._error_message;
+      const nodeEl = document.getElementById(n.id);
+      if (nodeEl) nodeEl.classList.remove('error-state');
 
       const previewImg = document.getElementById(`preview-img-${n.id}`);
       const previewPlaceholder = document.querySelector(`#preview-container-${n.id} .preview-placeholder`);

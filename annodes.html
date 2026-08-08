@@ -375,7 +375,31 @@
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 3px #a855f7, 0 0 35px rgba(168, 85, 247, 0.8);
       transition: all 0.2s ease;
     }
-    
+
+    /* Error state — persistent red glow until node is re-run successfully */
+    .node.error-state {
+      border-color: #ef4444 !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 2px #ef4444, 0 0 25px rgba(239, 68, 68, 0.5);
+      animation: error-pulse 2s infinite alternate;
+    }
+    .node.error-state .node-header {
+      background: rgba(239, 68, 68, 0.12) !important;
+    }
+    .node.error-state .node-header-title::after {
+      content: ' ⚠';
+      color: #ef4444;
+      font-size: 0.9em;
+    }
+    @keyframes error-pulse {
+      0% {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(239, 68, 68, 0.5), 0 0 15px rgba(239, 68, 68, 0.3);
+      }
+      100% {
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(239, 68, 68, 0.9), 0 0 30px rgba(239, 68, 68, 0.6);
+      }
+    }
+
+
     .node-header {
       padding: 10px 14px;
       background: rgba(255,255,255,0.03);
