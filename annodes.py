@@ -2069,13 +2069,53 @@ def run_flow(payload: RunFlowRequest):
                     if src_classes:
                         break
 
-            conflict_pairs = processed_ann.get("conflict_pairs", [])
-            resolved_annotations = list(processed_ann.get("resolved_annotations", []))
+            # Normalize processed_ann: may be a plain list (from YOLO/SAM3 direct output),
+            # or a dict from overlap_comparator with "conflict_pairs" / "resolved_annotations"
+            if isinstance(processed_ann, list):
+                conflict_pairs = []
+                resolved_annotations = list(processed_ann)
+            elif isinstance(processed_ann, dict):
+                raw_pairs = processed_ann.get("conflict_pairs", [])
+                resolved_annotations = list(processed_ann.get("resolved_annotations", []))
+                # Normalize old-format pairs (detection_a/detection_b) to new items[] format
+                conflict_pairs = []
+                for cp in raw_pairs:
+                    if "items" in cp:
+                        conflict_pairs.append(cp)
+                    elif "detection_a" in cp and "detection_b" in cp:
+                        # Convert old format to new items[] format
+                        items = []
+                        for idx, det_key in enumerate(["detection_a", "detection_b"]):
+                            det = cp[det_key]
+                            items.append({
+                                "index": idx + 1,
+                                "pin_name": det.get("source_pin", ""),
+                                "pin_label": det.get("source_label", str(idx + 1)),
+                                "class_id": det.get("class_id", 0),
+                                "class_name": det.get("class_name", ""),
+                                "image": det.get("image", ""),
+                                "bbox_crop": det.get("bbox_crop", ""),
+                                "seg_crop": det.get("seg_crop", ""),
+                                "coords": det.get("coords", []),
+                                "is_segment": det.get("is_segment", False),
+                                "confidence": det.get("confidence", 1.0)
+                            })
+                        conflict_pairs.append({
+                            "pair_id": cp.get("pair_id", f"conflict-{len(conflict_pairs)+1}"),
+                            "action": "compare",
+                            "items": items
+                        })
+            else:
+                conflict_pairs = []
+                resolved_annotations = []
             failed_annotations = []
             
             active_workers = []
-            for (to_nid, to_pin), (from_nid, from_pin) in connections_to.items():
-                if from_nid == node_id and from_pin.startswith("worker_input_"):
+            for conn in payload.connections:
+                if conn.get("fromNodeId") == node_id and conn.get("fromPinName", "").startswith("worker_input_"):
+                    to_nid = conn.get("toNodeId")
+                    to_pin = conn.get("toPinName")
+                    from_pin = conn.get("fromPinName")
                     try:
                         w_idx = int(from_pin.replace("worker_input_", ""))
                         active_workers.append((w_idx, to_nid, to_pin))
@@ -2107,6 +2147,8 @@ def run_flow(payload: RunFlowRequest):
                 worker_node = nodes.get(w_nid)
                 global_rules = worker_node["properties"].get("global_rules", "")
                 class_rules = worker_node["properties"].get("class_rules", {})
+                if not isinstance(class_rules, dict):
+                    class_rules = {}
                 
                 available_classes_str = ", ".join(f"[{i}: {c['name']}]" for i, c in enumerate(src_classes))
                 if not available_classes_str:
