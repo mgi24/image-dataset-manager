@@ -1579,6 +1579,11 @@
       rulesGroup.className = 'field-group';
       rulesGroup.innerHTML = `
         <span class="field-label">Class Rules Bindings</span>
+        <div style="font-size:0.68rem; color:var(--text-muted); margin:3px 0 6px 0; line-height:1.4;">
+          Tag placeholder yang tersedia:<br/>
+          <code style="color:#34d399; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{class_rules}</code>: Daftar aturan kelas binding<br/>
+          <code style="color:#38bdf8; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{class}</code>: Daftar kelas yang tersedia (Available Classes)
+        </div>
         <div id="rules-list-${node.id}" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;"></div>
         <div id="class-list-container-${node.id}" style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.06); padding-top:8px;"></div>
       `;
@@ -1594,14 +1599,35 @@
             💾 Save
           </button>
         </div>
-        <textarea class="field-input" style="width:100%; min-height:80px; font-family:inherit; resize:vertical; background:var(--bg-primary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-size:0.78rem; padding:6px 10px; box-sizing:border-box; outline:none; transition:border-color 0.15s;"></textarea>
+        <textarea class="field-input" style="width:100%; min-height:80px; font-family:inherit; resize:vertical; background:var(--bg-primary); border:1px solid var(--border); border-radius:6px; color:var(--text-primary); font-size:0.78rem; padding:6px 10px; box-sizing:border-box; outline:none; transition:border-color 0.15s;" placeholder="Masukkan aturan global atau sertakan placeholder {class_rules}, {class}, atau {image_input}..."></textarea>
+        
+        <div style="font-size:0.68rem; color:var(--text-muted); margin-top:5px; line-height:1.4;">
+          Tag placeholder pasangan konflik IoU:<br/>
+          <code style="color:#fbbf24; background:rgba(255,255,255,0.06); padding:1px 4px; border-radius:3px;">{image_input}</code>: Berisi info pasangan anotasi<br/>
+          <span style="color:var(--text-secondary); font-family:monospace;">image{index}:{annotation class}</span><br/>
+          <i>Contoh data konflik:</i><br/>
+          <span style="color:#94a3b8; font-family:monospace;">image 1: car<br/>image 2: truck<br/>image 3: truck</span><br/>
+          <span style="color:var(--text-muted); font-size:0.65rem;">(Jika `{}` diisi dalam global rules di atas, info tambahan tersebut akan dikirim ke AI)</span>
+        </div>
+
+        <div style="margin-top:8px;">
+          <button id="preview-toggle-${node.id}" class="btn btn-secondary" style="font-size:0.72rem; padding:4px 8px; width:100%; display:flex; align-items:center; justify-content:center; gap:6px;">
+            👁️ Show Preview
+          </button>
+          <div id="ai-prompt-preview-${node.id}" style="display:none; margin-top:8px; background:#060911; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:'JetBrains Mono', Consolas, monospace; font-size:0.7rem; color:#e2e8f0; max-height:220px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;"></div>
+        </div>
       `;
       const txtArea = globalGroup.querySelector('textarea');
       const globalSaveBtn = globalGroup.querySelector(`#global-save-${node.id}`);
+      const toggleBtn = globalGroup.querySelector(`#preview-toggle-${node.id}`);
+      const previewBox = globalGroup.querySelector(`#ai-prompt-preview-${node.id}`);
       
       txtArea.value = node.properties.global_rules || '';
       txtArea.oninput = () => {
         globalSaveBtn.style.display = 'inline-flex';
+        if (previewBox.style.display !== 'none') {
+          updateAiPromptPreview(node.id);
+        }
       };
       
       globalSaveBtn.onclick = (e) => {
@@ -1610,7 +1636,24 @@
         saveCanvas();
         globalSaveBtn.style.display = 'none';
         showToast('Global rules saved!', 'success');
+        if (previewBox.style.display !== 'none') {
+          updateAiPromptPreview(node.id);
+        }
       };
+
+      toggleBtn.onclick = (e) => {
+        e.preventDefault();
+        const isHidden = previewBox.style.display === 'none';
+        if (isHidden) {
+          updateAiPromptPreview(node.id);
+          previewBox.style.display = 'block';
+          toggleBtn.innerHTML = '👁️ Hide Preview';
+        } else {
+          previewBox.style.display = 'none';
+          toggleBtn.innerHTML = '👁️ Show Preview';
+        }
+      };
+
       body.appendChild(globalGroup);
 
       // Resizable Preview frame
@@ -2096,6 +2139,66 @@
       row.append(label, select, delBtn);
       bindingList.appendChild(row);
     });
+  }
+
+  function getAiDecisionInputClasses(nodeId) {
+    for (const conn of _connections) {
+      if (conn.toNodeId === nodeId && conn.toPinName === 'class') {
+        const fromNode = _nodes.find(n => n.id === conn.fromNodeId);
+        if (fromNode && fromNode.properties && fromNode.properties.classes) {
+          return fromNode.properties.classes;
+        }
+      }
+    }
+    return [];
+  }
+
+  function generateAiPromptPreviewText(node) {
+    let rawPrompt = (node.properties.global_rules || '').trim();
+    if (!rawPrompt) {
+      rawPrompt = `System Prompt: Evaluasi pasangan anotasi terdeteksi dan pilih hasil yang paling tepat.\n\nClass Rules:\n{class_rules}\n\nAvailable Classes: {class}\n\nConflict Inputs:\n{image_input}`;
+    }
+
+    // 1. {class_rules} replacement
+    const classRulesMap = node.properties.class_rules || {};
+    const inputClasses = getAiDecisionInputClasses(node.id);
+    let classRulesStr = '';
+    const ruleKeys = Object.keys(classRulesMap);
+    if (ruleKeys.length > 0) {
+      classRulesStr = ruleKeys.map(rText => {
+        const cIdx = classRulesMap[rText];
+        const cName = (cIdx !== undefined && cIdx < inputClasses.length) ? inputClasses[cIdx].name : `Class ${cIdx}`;
+        return `- Rule "${rText}" -> Target: ${cName}`;
+      }).join('\n');
+    } else {
+      classRulesStr = '- (Belum ada aturan kelas)';
+    }
+
+    // 2. {class} replacement
+    let classesStr = '';
+    if (inputClasses.length > 0) {
+      classesStr = inputClasses.map((c, idx) => `[${idx}: ${c.name}]`).join(', ');
+    } else {
+      classesStr = '[0: car], [1: truck], [2: bus], [3: motorcycle]';
+    }
+
+    // 3. {image_input} replacement
+    const sampleImageInput = `image 1: car\nimage 2: truck\nimage 3: truck`;
+
+    let preview = rawPrompt;
+    preview = preview.replace(/\{class_rules\}/g, classRulesStr);
+    preview = preview.replace(/\{class\}/g, classesStr);
+    preview = preview.replace(/\{image_input\}/g, sampleImageInput);
+
+    return preview;
+  }
+
+  function updateAiPromptPreview(nodeId) {
+    const previewBox = document.getElementById(`ai-prompt-preview-${nodeId}`);
+    if (!previewBox) return;
+    const node = _nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    previewBox.textContent = generateAiPromptPreviewText(node);
   }
 
   async function refreshAiDecisionRules(nodeId) {
