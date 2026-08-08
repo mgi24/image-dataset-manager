@@ -368,7 +368,11 @@
     try {
       const r = await fetch('/api/models');
       const d = await r.json();
-      if (d.success) _cachedModels = d.models || [];
+      if (Array.isArray(d)) {
+        _cachedModels = d;
+      } else if (d && d.models) {
+        _cachedModels = d.models;
+      }
     } catch (e) { console.warn('Failed to fetch models', e); }
   }
 
@@ -1009,8 +1013,11 @@
       const modelSel = document.createElement('select');
       modelSel.className = 'field-input';
       const yoloModels = _cachedModels.filter(m => !m.toLowerCase().includes('sam'));
-      if (yoloModels.length === 0) {
-        yoloModels.push('yolov8x-seg.pt');
+      if (!yoloModels.includes('platLarge.pt')) {
+        yoloModels.unshift('platLarge.pt');
+      }
+      if (!node.properties.model || node.properties.model === 'yolov8x-seg.pt') {
+        node.properties.model = 'platLarge.pt';
       }
       yoloModels.forEach(m => {
         const o = document.createElement('option');

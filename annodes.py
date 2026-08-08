@@ -212,9 +212,9 @@ def read_flow_tab(flow_id: str):
 @app.get("/api/models")
 def get_models():
     if not os.path.exists(MODEL_DIR):
-        return []
+        return {"success": True, "models": []}
     models = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
-    return sorted(models)
+    return {"success": True, "models": sorted(models)}
 
 @app.get("/api/gpus")
 def get_gpus():
