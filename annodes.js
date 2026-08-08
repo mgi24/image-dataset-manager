@@ -1979,6 +1979,16 @@
       
       body.appendChild(logsConsole);
       
+      if (node.properties.node_width) {
+        el.style.width = node.properties.node_width + 'px';
+      }
+      el.onmouseup = () => {
+        if (el.clientWidth) {
+          node.properties.node_width = el.clientWidth;
+          saveCanvas();
+        }
+      };
+      
       setTimeout(() => {
         renderPreviewContent(node.id, node.properties.last_preview);
       }, 0);
