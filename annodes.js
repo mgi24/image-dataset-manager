@@ -484,6 +484,10 @@
             'semua mobil kecil, minibus, termasuk mobil bak terbuka, kecualikan mobil dengan box bak tertutup.': '0'
           },
           global_rules: 'anda adalah manager dataset yang bertugas decide hasil dari deteksi sudah benar atau belum, compare mana yang bagus maskingnya, output json.',
+          global_rules_height: 90,
+          prompt_preview_height: 140,
+          logs_height: 60,
+          node_width: null,
           last_preview: null,
           last_logs: null,
           preview_width: 320,
@@ -1617,11 +1621,44 @@
           <div id="ai-prompt-preview-${node.id}" style="display:none; margin-top:8px; background:#060911; border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:'JetBrains Mono', Consolas, monospace; font-size:0.7rem; color:#e2e8f0; max-height:220px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;"></div>
         </div>
       `;
+      // Restore node width if saved
+      if (node.properties.node_width) {
+        el.style.width = node.properties.node_width + 'px';
+      }
+      el.onmouseup = () => {
+        if (el.clientWidth) {
+          node.properties.node_width = el.clientWidth;
+          saveCanvas();
+        }
+      };
+
       const txtArea = globalGroup.querySelector('textarea');
       const globalSaveBtn = globalGroup.querySelector(`#global-save-${node.id}`);
       const toggleBtn = globalGroup.querySelector(`#preview-toggle-${node.id}`);
       const previewBox = globalGroup.querySelector(`#ai-prompt-preview-${node.id}`);
       
+      if (node.properties.global_rules_height) {
+        txtArea.style.height = node.properties.global_rules_height + 'px';
+      }
+      txtArea.onmouseup = () => {
+        if (txtArea.clientHeight) {
+          node.properties.global_rules_height = txtArea.clientHeight;
+          saveCanvas();
+        }
+      };
+
+      previewBox.style.resize = 'vertical';
+      if (node.properties.prompt_preview_height) {
+        previewBox.style.height = node.properties.prompt_preview_height + 'px';
+        previewBox.style.maxHeight = 'none';
+      }
+      previewBox.onmouseup = () => {
+        if (previewBox.clientHeight) {
+          node.properties.prompt_preview_height = previewBox.clientHeight;
+          saveCanvas();
+        }
+      };
+
       txtArea.value = node.properties.global_rules || '';
       txtArea.oninput = () => {
         globalSaveBtn.style.display = 'inline-flex';
@@ -1663,6 +1700,8 @@
       previewContainer.style.cssText = 'overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: stretch; justify-content: flex-start;';
       if (node.properties.preview_width) {
         previewContainer.style.width = node.properties.preview_width + 'px';
+      }
+      if (node.properties.preview_height) {
         previewContainer.style.height = node.properties.preview_height + 'px';
       }
       previewContainer.onmouseup = () => {
@@ -1674,7 +1713,17 @@
       const logsConsole = document.createElement('div');
       logsConsole.className = 'yolo-logs-console';
       logsConsole.id = `yolo-logs-${node.id}`;
-      logsConsole.style.cssText = 'height:60px; max-height:80px; font-family:monospace; font-size:0.7rem; background:#070a13; border:1px solid var(--border); border-radius:6px; padding:6px; color:#ef4444; overflow-y:auto; box-sizing:border-box; margin-top:4px; font-weight:normal; line-height:1.2;';
+      logsConsole.style.cssText = 'height:60px; font-family:monospace; font-size:0.7rem; background:#070a13; border:1px solid var(--border); border-radius:6px; padding:6px; color:#ef4444; overflow-y:auto; box-sizing:border-box; margin-top:4px; font-weight:normal; line-height:1.2; resize:vertical;';
+      if (node.properties.logs_height) {
+        logsConsole.style.height = node.properties.logs_height + 'px';
+        logsConsole.style.maxHeight = 'none';
+      }
+      logsConsole.onmouseup = () => {
+        if (logsConsole.clientHeight) {
+          node.properties.logs_height = logsConsole.clientHeight;
+          saveCanvas();
+        }
+      };
       logsConsole.innerHTML = node.properties.last_logs || '<div style="color:var(--text-muted);">No logs available. Run flow to see output.</div>';
       
       body.append(previewContainer, logsConsole);
