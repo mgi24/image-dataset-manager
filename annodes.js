@@ -2642,7 +2642,15 @@
       });
       
       if (!r.ok) {
-        throw new Error(`HTTP error! status: ${r.status}`);
+        let errDetail = `HTTP error! status: ${r.status}`;
+        try {
+          const errJson = await r.json();
+          if (errJson && errJson.detail) {
+            errDetail = errJson.detail;
+          }
+        } catch (e) {}
+        showToast(`Run Flow Error: ${errDetail}`, 'error');
+        throw new Error(errDetail);
       }
 
       const reader = r.body.getReader();
