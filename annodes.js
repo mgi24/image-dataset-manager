@@ -471,6 +471,7 @@
         properties = {
           input_pins: ['image', 'annotation1', 'annotation2'],
           iou_threshold: 0.5,
+          comparator_rules: [],
           last_preview: null,
           preview_width: 320,
           preview_height: 240
@@ -495,6 +496,11 @@
           last_preview: null,
           preview_width: 320,
           preview_height: 240
+        };
+      } else if (type === 'save_annotation') {
+        properties = {
+          output_dir: '',
+          last_logs: null
         };
       }
     }
@@ -1323,8 +1329,160 @@
         let optional = name === 'class';
         return { name, label, optional };
       });
-      const pins = createPinsLayout(node, pins_in, []);
+      const pins_out = [
+        { name: 'image', label: 'Image' },
+        { name: 'processed_annotation', label: 'Processed Annotation' }
+      ];
+      const pins = createPinsLayout(node, pins_in, pins_out);
       body.appendChild(pins);
+
+      // Comparator Action Section (below input pins, above IoU threshold)
+      const actionGroup = document.createElement('div');
+      actionGroup.className = 'field-group';
+      actionGroup.style.cssText = 'margin-top:4px; margin-bottom:8px; border:1px solid var(--border); border-radius:6px; padding:8px; background:rgba(255,255,255,0.02);';
+      
+      const actionHeader = document.createElement('div');
+      actionHeader.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+      actionHeader.innerHTML = `
+        <span class="field-label" style="margin:0; font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em;">Comparator Action</span>
+      `;
+      actionGroup.appendChild(actionHeader);
+
+      const rulesContainer = document.createElement('div');
+      rulesContainer.id = `comparator-rules-list-${node.id}`;
+      rulesContainer.style.cssText = 'display:flex; flex-direction:column; gap:4px; margin-bottom:8px; max-height:100px; overflow-y:auto;';
+      actionGroup.appendChild(rulesContainer);
+
+      const renderComparatorRules = () => {
+        rulesContainer.innerHTML = '';
+        const rules = node.properties.comparator_rules || [];
+        if (rules.length === 0) {
+          const hint = document.createElement('div');
+          hint.style.cssText = 'font-size:0.7rem; color:var(--text-muted); text-align:center; padding:2px; font-style:italic;';
+          hint.textContent = 'Default aksi pasang terdeteksi: Compare';
+          rulesContainer.appendChild(hint);
+        } else {
+          rules.forEach((rule, rIdx) => {
+            const rRow = document.createElement('div');
+            rRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.2); border:1px solid var(--border); padding:3px 6px; border-radius:4px; font-size:0.72rem;';
+            
+            let actTxt = 'Compare';
+            if (rule.action === 'choose_src') actTxt = `Choose ${rule.src}`;
+            else if (rule.action === 'choose_target') actTxt = `Choose ${rule.target}`;
+            else if (rule.action === 'choose_annotation1') actTxt = `Choose ${rule.src}`;
+            else if (rule.action === 'choose_annotation2') actTxt = `Choose ${rule.target}`;
+
+            const rLabel = document.createElement('span');
+            rLabel.style.cssText = 'color:var(--text-primary); font-weight:500; text-overflow:ellipsis; overflow:hidden; white-space:nowrap; margin-right:4px;';
+            rLabel.textContent = `${rule.src} ↔ ${rule.target} ➔ ${actTxt}`;
+
+            const rDelBtn = document.createElement('button');
+            rDelBtn.className = 'node-close-btn';
+            rDelBtn.textContent = '×';
+            rDelBtn.style.cssText = 'font-size:0.9rem; padding:0 3px; color:#ef4444; background:none; border:none; cursor:pointer;';
+            rDelBtn.onclick = () => {
+              node.properties.comparator_rules.splice(rIdx, 1);
+              saveCanvas();
+              renderComparatorRules();
+            };
+
+            rRow.append(rLabel, rDelBtn);
+            rulesContainer.appendChild(rRow);
+          });
+        }
+      };
+
+      // Add Rule Form
+      const addRuleForm = document.createElement('div');
+      addRuleForm.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+      
+      const selectsRow = document.createElement('div');
+      selectsRow.style.cssText = 'display:flex; gap:4px; align-items:center;';
+
+      const annoPinsOnly = inputPins.filter(p => p.startsWith('annotation'));
+
+      const srcSel = document.createElement('select');
+      srcSel.className = 'binding-select';
+      srcSel.style.cssText = 'flex:1; font-size:0.7rem; padding:2px; min-width:0;';
+      
+      const targetSel = document.createElement('select');
+      targetSel.className = 'binding-select';
+      targetSel.style.cssText = 'flex:1; font-size:0.7rem; padding:2px; min-width:0;';
+
+      const actionSel = document.createElement('select');
+      actionSel.className = 'binding-select';
+      actionSel.style.cssText = 'flex:1.2; font-size:0.7rem; padding:2px; min-width:0;';
+
+      const updateSelectOptions = () => {
+        srcSel.innerHTML = '';
+        targetSel.innerHTML = '';
+        annoPinsOnly.forEach(p => {
+          const opt1 = document.createElement('option');
+          opt1.value = p; opt1.textContent = p;
+          srcSel.appendChild(opt1);
+
+          const opt2 = document.createElement('option');
+          opt2.value = p; opt2.textContent = p;
+          targetSel.appendChild(opt2);
+        });
+        if (targetSel.options.length > 1) {
+          targetSel.selectedIndex = 1;
+        }
+        updateActionOptions();
+      };
+
+      const updateActionOptions = () => {
+        actionSel.innerHTML = '';
+        const sVal = srcSel.value || 'Input 1';
+        const tVal = targetSel.value || 'Input 2';
+
+        const o1 = document.createElement('option');
+        o1.value = 'choose_src'; o1.textContent = `Choose ${sVal}`;
+        
+        const o2 = document.createElement('option');
+        o2.value = 'choose_target'; o2.textContent = `Choose ${tVal}`;
+
+        const o3 = document.createElement('option');
+        o3.value = 'compare'; o3.textContent = 'Compare';
+
+        actionSel.append(o1, o2, o3);
+      };
+
+      srcSel.onchange = updateActionOptions;
+      targetSel.onchange = updateActionOptions;
+      updateSelectOptions();
+
+      const addRuleBtn = document.createElement('button');
+      addRuleBtn.className = 'btn';
+      addRuleBtn.style.cssText = 'padding:3px 8px; font-size:0.7rem; background:var(--accent); margin-top:2px; width:100%;';
+      addRuleBtn.textContent = '+ Add Action Rule';
+      addRuleBtn.onclick = (e) => {
+        e.preventDefault();
+        const sVal = srcSel.value;
+        const tVal = targetSel.value;
+        const aVal = actionSel.value;
+        if (!sVal || !tVal) return;
+        if (sVal === tVal) {
+          showToast('Source dan target annotation harus berbeda.', 'error');
+          return;
+        }
+        if (!node.properties.comparator_rules) node.properties.comparator_rules = [];
+        
+        node.properties.comparator_rules = node.properties.comparator_rules.filter(r => 
+          !( (r.src === sVal && r.target === tVal) || (r.src === tVal && r.target === sVal) )
+        );
+
+        node.properties.comparator_rules.push({ src: sVal, target: tVal, action: aVal });
+        saveCanvas();
+        renderComparatorRules();
+      };
+
+      selectsRow.append(srcSel, targetSel);
+      addRuleForm.append(selectsRow, actionSel, addRuleBtn);
+      actionGroup.appendChild(addRuleForm);
+
+      body.appendChild(actionGroup);
+      setTimeout(renderComparatorRules, 0);
 
       // IoU Threshold Slider
       const iouGroup = document.createElement('div');
@@ -1585,6 +1743,80 @@
       }
 
       body.appendChild(previewContainer);
+    } else if (node.type === 'save_annotation') {
+      const pins = createPinsLayout(node,
+        [
+          { name: 'image', label: 'Image' },
+          { name: 'annotation', label: 'Annotation' }
+        ],
+        []
+      );
+      body.appendChild(pins);
+
+      // Output Directory Input & Browse Button
+      const dirGroup = document.createElement('div');
+      dirGroup.className = 'field-group';
+      dirGroup.innerHTML = `<span class="field-label">Save Directory</span>`;
+
+      const inputRow = document.createElement('div');
+      inputRow.style.cssText = 'display:flex; gap:6px; align-items:center;';
+
+      const dirInp = document.createElement('input');
+      dirInp.className = 'field-input';
+      dirInp.type = 'text';
+      dirInp.placeholder = 'Select folder to save...';
+      dirInp.value = node.properties.output_dir || '';
+      dirInp.style.flex = '1';
+      dirInp.oninput = () => {
+        node.properties.output_dir = dirInp.value;
+        saveCanvas();
+      };
+
+      const browseBtn = document.createElement('button');
+      browseBtn.className = 'btn btn-secondary';
+      browseBtn.style.cssText = 'padding:6px 10px; font-size:0.75rem; white-space:nowrap;';
+      browseBtn.textContent = 'Browse...';
+      browseBtn.onclick = async (e) => {
+        e.preventDefault();
+        browseBtn.disabled = true;
+        browseBtn.textContent = 'Opening...';
+        try {
+          const r = await fetch('/api/select-folder', { method: 'POST' });
+          const d = await r.json();
+          if (d.success && d.path) {
+            dirInp.value = d.path;
+            node.properties.output_dir = d.path;
+            saveCanvas();
+            showToast('Folder selected: ' + d.path, 'success');
+          } else if (d.message) {
+            showToast(d.message, 'info');
+          }
+        } catch (err) {
+          showToast('Failed to select folder: ' + err.message, 'error');
+        } finally {
+          browseBtn.disabled = false;
+          browseBtn.textContent = 'Browse...';
+        }
+      };
+
+      inputRow.append(dirInp, browseBtn);
+      dirGroup.appendChild(inputRow);
+      body.appendChild(dirGroup);
+
+      // Console / Logs output
+      const logsGroup = document.createElement('div');
+      logsGroup.className = 'field-group';
+      logsGroup.innerHTML = `
+        <span class="field-label">Save Status & Logs</span>
+        <div class="yolo-logs-container" id="yolo-logs-${node.id}">
+          <span style="color:var(--text-muted);">No logs available. Run flow to save.</span>
+        </div>
+      `;
+      const logsConsole = logsGroup.querySelector('.yolo-logs-container');
+      if (node.properties.last_logs) {
+        logsConsole.innerHTML = node.properties.last_logs;
+      }
+      body.appendChild(logsGroup);
     }
 
     el.append(header, body);
@@ -2702,6 +2934,8 @@
         }
       };
 
+      let editingEndpointIdx = null;
+
       saveEpBtn.onclick = async () => {
         const name = epNameInput.value.trim();
         const url = epUrlInput.value.trim();
@@ -2712,13 +2946,18 @@
           return;
         }
 
-        // Add or replace endpoint in local array
-        const existingEpIdx = _aiEndpoints.findIndex(e => e.name === name);
         const epData = { name, url, api_key };
-        if (existingEpIdx !== -1) {
-          _aiEndpoints[existingEpIdx] = epData;
+        
+        if (editingEndpointIdx !== null && editingEndpointIdx >= 0 && editingEndpointIdx < _aiEndpoints.length) {
+          _aiEndpoints[editingEndpointIdx] = epData;
+          editingEndpointIdx = null;
         } else {
-          _aiEndpoints.push(epData);
+          const existingEpIdx = _aiEndpoints.findIndex(e => e.name === name);
+          if (existingEpIdx !== -1) {
+            _aiEndpoints[existingEpIdx] = epData;
+          } else {
+            _aiEndpoints.push(epData);
+          }
         }
 
         // Overwrite active models list if we retrieved models during check
@@ -2733,6 +2972,69 @@
       };
 
       body.appendChild(addEndpointSection);
+
+      // 4. Endpoint List section (below Add / Edit Endpoint)
+      const endpointsSection = document.createElement('div');
+      endpointsSection.style.cssText = 'border-top:1px solid var(--border); padding-top:12px; display:flex; flex-direction:column; gap:8px;';
+      endpointsSection.innerHTML = `
+        <span class="modal-section-title">Endpoint List (${_aiEndpoints.length})</span>
+        <div id="modal-endpoints-list" style="max-height:160px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:6px; background:rgba(10,15,26,0.3); min-height:60px;"></div>
+      `;
+      const endpointsListContainer = endpointsSection.querySelector('#modal-endpoints-list');
+      if (_aiEndpoints.length === 0) {
+        endpointsListContainer.innerHTML = '<div style="color:var(--text-muted); font-size:0.75rem; text-align:center; padding:12px;">Belum ada endpoint tersimpan.</div>';
+      } else {
+        _aiEndpoints.forEach((ep, idx) => {
+          const row = document.createElement('div');
+          row.className = 'endpoint-item';
+          row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:rgba(10, 15, 26, 0.4); border:1px solid var(--border); padding:8px 12px; border-radius:8px; margin-bottom:6px;';
+          
+          const infoDiv = document.createElement('div');
+          infoDiv.style.cssText = 'display:flex; flex-direction:column; gap:2px; overflow:hidden; margin-right:8px;';
+          infoDiv.innerHTML = `
+            <div style="font-size:0.78rem; font-weight:600; color:var(--text-primary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${ep.name}</div>
+            <div style="font-size:0.7rem; color:var(--text-muted); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${ep.url}</div>
+          `;
+
+          const actionDiv = document.createElement('div');
+          actionDiv.style.cssText = 'display:flex; gap:6px; align-items:center; flex-shrink:0;';
+
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn btn-secondary';
+          editBtn.style.cssText = 'padding:3px 8px; font-size:0.7rem; border-radius:4px; display:inline-flex; align-items:center; gap:4px;';
+          editBtn.innerHTML = '✏️ Edit';
+          editBtn.title = 'Edit Endpoint';
+          editBtn.onclick = () => {
+            editingEndpointIdx = idx;
+            epNameInput.value = ep.name;
+            epUrlInput.value = ep.url;
+            epKeyInput.value = ep.api_key || '';
+            saveEpBtn.textContent = 'Update Endpoint';
+            epNameInput.focus();
+            showToast(`Editing endpoint '${ep.name}'`, 'info');
+          };
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'model-delete-btn';
+          delBtn.style.cssText = 'padding:2px 6px; font-size:1.1rem; border:none; background:none; color:#ef4444; cursor:pointer; font-weight:bold; line-height:1;';
+          delBtn.innerHTML = '&times;';
+          delBtn.title = 'Hapus Endpoint';
+          delBtn.onclick = async () => {
+            if (confirm(`Hapus endpoint '${ep.name}'?`)) {
+              _aiEndpoints.splice(idx, 1);
+              await saveAiConfig();
+              showToast(`Endpoint '${ep.name}' berhasil dihapus.`, 'success');
+              onModalSaveCallback();
+              renderModalContent();
+            }
+          };
+
+          actionDiv.append(editBtn, delBtn);
+          row.append(infoDiv, actionDiv);
+          endpointsListContainer.appendChild(row);
+        });
+      }
+      body.appendChild(endpointsSection);
     };
 
     renderModalContent();

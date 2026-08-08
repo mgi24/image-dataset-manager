@@ -462,23 +462,46 @@ def check_endpoint(payload: AICheckEndpointRequest):
         if "data" in data and isinstance(data["data"], list):
             for item in data["data"]:
                 if isinstance(item, dict):
-                    models.append(item.get("id") or item.get("name"))
+                    m_id = item.get("id") or item.get("name")
+                    if m_id:
+                        models.append(str(m_id).replace("models/", ""))
         elif "models" in data and isinstance(data["models"], list):
             for item in data["models"]:
                 if isinstance(item, dict):
-                    models.append(item.get("name") or item.get("id"))
+                    m_id = item.get("name") or item.get("id")
+                    if m_id:
+                        models.append(str(m_id).replace("models/", ""))
         else:
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, str):
-                        models.append(item)
+                        models.append(item.replace("models/", ""))
                     elif isinstance(item, dict):
-                        models.append(item.get("id") or item.get("name"))
+                        m_id = item.get("id") or item.get("name")
+                        if m_id:
+                            models.append(str(m_id).replace("models/", ""))
                         
         models = [m for m in models if m]
         return {"success": True, "models": sorted(list(set(models)))}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to endpoint: {str(e)}")
+
+@app.post("/api/select-folder")
+def select_folder():
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        folder_selected = filedialog.askdirectory(title="Select Save Annotation Directory")
+        root.destroy()
+        if folder_selected:
+            folder_selected = os.path.normpath(folder_selected)
+            return {"success": True, "path": folder_selected}
+        return {"success": False, "message": "Selection cancelled"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.get("/api/tabs")
 def get_tabs():
@@ -651,6 +674,326 @@ def calculate_iou(annoA, annoB, h, w):
     union = np.logical_or(maskA, maskB).sum()
 
     return float(intersection) / float(union) if union > 0 else 0.0
+
+def process_overlap_comparator_node(node, connections_to, evaluate):
+    node_id = node["id"]
+    img_source = connections_to.get((node_id, "image"))
+    class_source = connections_to.get((node_id, "class"))
+
+    if not img_source:
+        raise HTTPException(status_code=400, detail="Overlap Comparator node is missing connected 'Image' input")
+
+    src_image_path = evaluate(img_source[0], img_source[1])
+    
+    src_classes = []
+    if class_source:
+        src_classes = evaluate(class_source[0], class_source[1])
+
+    input_pins = node["properties"].get("input_pins", ["image", "class", "annotation1", "annotation2"])
+    comparator_rules = node["properties"].get("comparator_rules", [])
+
+    def get_rule_action(pin_a, pin_b):
+        for r in comparator_rules:
+            s, t, act = r.get("src"), r.get("target"), r.get("action")
+            if (s == pin_a and t == pin_b) or (s == pin_b and t == pin_a):
+                if act in ("choose_src", "choose_annotation1"):
+                    return "choose_pin_a" if s == pin_a else "choose_pin_b"
+                elif act in ("choose_target", "choose_annotation2"):
+                    return "choose_pin_b" if s == pin_a else "choose_pin_a"
+                elif act == "compare":
+                    return "compare"
+        return "compare" # Default action if unconfigured
+
+    annotation_inputs = []
+    for pin_name in input_pins:
+        if pin_name.startswith("annotation"):
+            anno_src = connections_to.get((node_id, pin_name))
+            pin_idx_str = pin_name.replace("annotation", "")
+            pin_label = f"Annotation {pin_idx_str}"
+            if anno_src:
+                annos = evaluate(anno_src[0], anno_src[1])
+                annotation_inputs.append((pin_name, pin_label, annos))
+
+    img = cv2.imread(src_image_path)
+    if img is None:
+        raise HTTPException(status_code=500, detail=f"Failed to load image '{src_image_path}' for Overlap Comparator")
+    
+    h, w = img.shape[:2]
+    preview_items = []
+
+    # 1. RAW preview items
+    for pin_name, pin_label, annos in annotation_inputs:
+        raw_annotated = img.copy()
+        for anno in annos:
+            class_id = anno["class_id"]
+            coords = anno["coords"]
+            is_segment = anno.get("is_segment", len(coords) > 4)
+            
+            target_name = f"Class {class_id}"
+            target_color = "#10b981"
+            if class_id < len(src_classes):
+                target_name = src_classes[class_id]["name"]
+                target_color = src_classes[class_id]["color"]
+            bgr = hex_to_bgr(target_color)
+
+            lbl_x, lbl_y = 0, 0
+            if is_segment:
+                pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+                if len(pts_px) >= 3:
+                    overlay = raw_annotated.copy()
+                    cv2.fillPoly(overlay, [pts_px], bgr)
+                    cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
+                    cv2.polylines(raw_annotated, [pts_px], True, bgr, 2)
+                    min_y_idx = np.argmin(pts_px[:, 1])
+                    lbl_x, lbl_y = int(pts_px[min_y_idx][0]), int(pts_px[min_y_idx][1])
+            else:
+                if len(coords) >= 4:
+                    xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                    x1 = int((xc - bw/2) * w)
+                    y1 = int((yc - bh/2) * h)
+                    x2 = int((xc + bw/2) * w)
+                    y2 = int((yc + bh/2) * h)
+                    overlay = raw_annotated.copy()
+                    cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
+                    cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
+                    cv2.rectangle(raw_annotated, (x1, y1), (x2, y2), bgr, 2)
+                    lbl_x, lbl_y = x1, y1
+
+            if class_source:
+                conf = anno.get("confidence")
+                lbl_txt = target_name
+                if conf is not None:
+                    lbl_txt += f" {conf:.2f}"
+                (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                cv2.rectangle(raw_annotated, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
+                cv2.putText(raw_annotated, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        _, raw_buf = cv2.imencode(".jpg", raw_annotated)
+        raw_b64 = base64.b64encode(raw_buf).decode("utf-8")
+        preview_items.append({
+            "label": f"RAW: {pin_label}",
+            "image": raw_b64,
+            "category": "raw"
+        })
+
+    # 2. COMPARE PAIRS AND RESOLVE ACTIONS
+    threshold = float(node["properties"].get("iou_threshold", 0.5))
+
+    def get_detection_crops(anno, color_hex):
+        coords = anno["coords"]
+        is_segment = anno.get("is_segment", len(coords) > 4)
+        if is_segment:
+            xs = coords[0::2]
+            ys = coords[1::2]
+            cx1, cy1 = int(min(xs)*w), int(min(ys)*h)
+            cx2, cy2 = int(max(xs)*w), int(max(ys)*h)
+        else:
+            if len(coords) >= 4:
+                xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
+                cx1 = int((xc - bw/2)*w)
+                cy1 = int((yc - bh/2)*h)
+                cx2 = int((xc + bw/2)*w)
+                cy2 = int((yc + bh/2)*h)
+            else:
+                return None, None
+        
+        cx1 = max(0, min(cx1, w - 1))
+        cx2 = max(0, min(cx2, w - 1))
+        cy1 = max(0, min(cy1, h - 1))
+        cy2 = max(0, min(cy2, h - 1))
+        
+        cw = cx2 - cx1
+        ch = cy2 - cy1
+        if cw <= 0 or ch <= 0:
+            return None, None
+        
+        bgr = hex_to_bgr(color_hex)
+        left_crop = img[cy1:cy2, cx1:cx2].copy()
+        if is_segment:
+            pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+            pts_offset = pts_px - [cx1, cy1]
+            if len(pts_offset) >= 3:
+                overlay_crop = left_crop.copy()
+                cv2.fillPoly(overlay_crop, [pts_offset], bgr)
+                cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+                cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
+        else:
+            overlay_crop = left_crop.copy()
+            cv2.rectangle(overlay_crop, (0, 0), (cw, ch), bgr, -1)
+            cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
+            cv2.rectangle(left_crop, (0, 0), (cw, ch), bgr, 2)
+            
+        mask = np.zeros((h, w), dtype=np.uint8)
+        if is_segment:
+            pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
+            if len(pts_px) >= 3:
+                cv2.fillPoly(mask, [pts_px], 255)
+        else:
+            cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
+            
+        masked_img = cv2.bitwise_and(img, img, mask=mask)
+        right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
+        return left_crop, right_crop
+
+    all_detections = []
+    for src_idx, (pin_name, pin_label, annos) in enumerate(annotation_inputs):
+        for anno in annos:
+            all_detections.append({
+                "pin_name": pin_name,
+                "pin_label": pin_label,
+                "src_idx": src_idx,
+                "anno": anno,
+                "global_idx": len(all_detections)
+            })
+
+    num_dets = len(all_detections)
+    adj = [[] for _ in range(num_dets)]
+    for i in range(num_dets):
+        for j in range(i + 1, num_dets):
+            iou = calculate_iou(all_detections[i]["anno"], all_detections[j]["anno"], h, w)
+            if iou >= threshold:
+                adj[i].append((j, iou))
+                adj[j].append((i, iou))
+
+    visited = set()
+    clusters = []
+    for i in range(num_dets):
+        if i not in visited:
+            comp = []
+            q = [i]
+            visited.add(i)
+            while q:
+                curr = q.pop(0)
+                comp.append(all_detections[curr])
+                for neighbor, _ in adj[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        q.append(neighbor)
+            clusters.append(comp)
+
+    resolved_annotations = []
+    conflict_pairs = []
+
+    # Process each component cluster
+    for comp in clusters:
+        sources_in_comp = set(det["src_idx"] for det in comp)
+        if len(comp) > 1 and len(sources_in_comp) > 1:
+            # Multi-source overlap
+            comp.sort(key=lambda d: (d["src_idx"], d["anno"]["class_id"]))
+            
+            # Compare pairs in component
+            for i_idx in range(len(comp)):
+                for j_idx in range(i_idx + 1, len(comp)):
+                    det_A = comp[i_idx]
+                    det_B = comp[j_idx]
+                    iou_val = calculate_iou(det_A["anno"], det_B["anno"], h, w)
+                    if iou_val < threshold:
+                        continue
+
+                    c_id_A = det_A["anno"]["class_id"]
+                    c_name_A = src_classes[c_id_A]["name"] if c_id_A < len(src_classes) else f"Class {c_id_A}"
+                    color_A = src_classes[c_id_A]["color"] if c_id_A < len(src_classes) else "#10b981"
+
+                    c_id_B = det_B["anno"]["class_id"]
+                    c_name_B = src_classes[c_id_B]["name"] if c_id_B < len(src_classes) else f"Class {c_id_B}"
+                    color_B = src_classes[c_id_B]["color"] if c_id_B < len(src_classes) else "#3b82f6"
+
+                    action = get_rule_action(det_A["pin_name"], det_B["pin_name"])
+
+                    if action == "choose_pin_a":
+                        if det_A["anno"] not in resolved_annotations:
+                            resolved_annotations.append(det_A["anno"])
+                    elif action == "choose_pin_b":
+                        if det_B["anno"] not in resolved_annotations:
+                            resolved_annotations.append(det_B["anno"])
+                    else: # action == "compare" (default)
+                        conflict_pairs.append({
+                            "pair_id": f"conflict-{len(conflict_pairs)+1}",
+                            "iou": round(float(iou_val), 4),
+                            "action": "compare",
+                            "detection_a": {
+                                "source_pin": det_A["pin_name"],
+                                "source_label": det_A["pin_label"],
+                                "class_id": c_id_A,
+                                "class_name": c_name_A,
+                                "confidence": det_A["anno"].get("confidence"),
+                                "coords": det_A["anno"]["coords"],
+                                "is_segment": det_A["anno"].get("is_segment", len(det_A["anno"]["coords"]) > 4)
+                            },
+                            "detection_b": {
+                                "source_pin": det_B["pin_name"],
+                                "source_label": det_B["pin_label"],
+                                "class_id": c_id_B,
+                                "class_name": c_name_B,
+                                "confidence": det_B["anno"].get("confidence"),
+                                "coords": det_B["anno"]["coords"],
+                                "is_segment": det_B["anno"].get("is_segment", len(det_B["anno"]["coords"]) > 4)
+                            }
+                        })
+
+                    # Generate SEPARATE PREVIEW ITEMS per image for det_A and det_B
+                    crop_bbox_A, crop_seg_A = get_detection_crops(det_A["anno"], color_A)
+                    if crop_bbox_A is not None and crop_seg_A is not None:
+                        row_img_A = np.hstack([crop_bbox_A, crop_seg_A])
+                        h_row, w_row = row_img_A.shape[:2]
+                        cv2.line(row_img_A, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
+                        _, buf_A = cv2.imencode(".jpg", row_img_A)
+                        b64_A = base64.b64encode(buf_A).decode("utf-8")
+                        
+                        preview_items.append({
+                            "label": f"Overlap ({det_A['pin_label']}: {c_name_A}) - IoU {iou_val*100:.0f}% w/ {det_B['pin_label']} [{action}]",
+                            "image": b64_A,
+                            "category": "overlap"
+                        })
+
+                    crop_bbox_B, crop_seg_B = get_detection_crops(det_B["anno"], color_B)
+                    if crop_bbox_B is not None and crop_seg_B is not None:
+                        row_img_B = np.hstack([crop_bbox_B, crop_seg_B])
+                        h_row, w_row = row_img_B.shape[:2]
+                        cv2.line(row_img_B, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
+                        _, buf_B = cv2.imencode(".jpg", row_img_B)
+                        b64_B = base64.b64encode(buf_B).decode("utf-8")
+                        
+                        preview_items.append({
+                            "label": f"Overlap ({det_B['pin_label']}: {c_name_B}) - IoU {iou_val*100:.0f}% w/ {det_A['pin_label']} [{action}]",
+                            "image": b64_B,
+                            "category": "overlap"
+                        })
+        else:
+            # Non-overlapping detections automatically added to output
+            for det in comp:
+                if det["anno"] not in resolved_annotations:
+                    resolved_annotations.append(det["anno"])
+                
+                c_id = det["anno"]["class_id"]
+                color = "#10b981"
+                class_name = f"Class {c_id}"
+                if c_id < len(src_classes):
+                    color = src_classes[c_id]["color"]
+                    class_name = src_classes[c_id]["name"]
+                    
+                crop_bbox, crop_seg = get_detection_crops(det["anno"], color)
+                if crop_bbox is not None and crop_seg is not None:
+                    row_img = np.hstack([crop_bbox, crop_seg])
+                    h_row, w_row = row_img.shape[:2]
+                    cv2.line(row_img, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
+                    
+                    _, no_buf = cv2.imencode(".jpg", row_img)
+                    no_b64 = base64.b64encode(no_buf).decode("utf-8")
+                    
+                    preview_items.append({
+                        "label": f"Not Overlap: From {det['pin_label']} ({class_name}) (BBox | Segment)",
+                        "image": no_b64,
+                        "category": "not_overlap"
+                    })
+
+    processed_data = {
+        "image_path": src_image_path,
+        "resolved_annotations": resolved_annotations,
+        "conflict_pairs": conflict_pairs
+    }
+
+    return processed_data, preview_items
 
 @app.post("/api/run-flow")
 def run_flow(payload: RunFlowRequest):
@@ -1331,19 +1674,146 @@ def run_flow(payload: RunFlowRequest):
                     eval_cache[(node_id, "image")] = src_image_path
                 
             event_queue.put({"type": "end", "node_id": node_id})
+        # 6. Overlap Comparator Node
+        elif node["type"] == "overlap_comparator":
+            event_queue.put({"type": "start", "node_id": node_id})
+
+            img_source = connections_to.get((node_id, "image"))
+            if not img_source:
+                event_queue.put({"type": "end", "node_id": node_id})
+                raise HTTPException(status_code=400, detail="Overlap Comparator node is missing connected 'Image' input")
+            
+            src_image_path = evaluate(img_source[0], img_source[1])
+            processed_data, preview_items = process_overlap_comparator_node(node, connections_to, evaluate)
+
+            with cache_lock:
+                previews[node_id] = preview_items
+                eval_cache[(node_id, "image")] = src_image_path
+                eval_cache[(node_id, "processed_annotation")] = processed_data
+
+            event_queue.put({"type": "end", "node_id": node_id})
             event_queue.put({
                 "type": "preview",
                 "node_id": node_id,
-                "preview": preview_b64,
+                "preview": preview_items,
+                "logs": ""
+            })
+            return eval_cache[cache_key]
+
+        # 7. Save Annotation Node
+        elif node["type"] == "save_annotation":
+            event_queue.put({"type": "start", "node_id": node_id})
+
+            output_dir = node["properties"].get("output_dir", "").strip()
+            if not output_dir:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = '<div style="color:#ef4444; font-weight:bold;">[ERROR] Save directory is empty. Click Browse to select a folder.</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=400, detail="Save Annotation node: Folder output belum ditentukan.")
+
+            images_dir = os.path.join(output_dir, "images")
+            labels_dir = os.path.join(output_dir, "labels")
+
+            # Ensure subfolders exist or create them
+            try:
+                os.makedirs(images_dir, exist_ok=True)
+                os.makedirs(labels_dir, exist_ok=True)
+            except Exception as ex:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = f'<div style="color:#ef4444; font-weight:bold;">[ERROR] Gagal membuat subfolder images/labels: {str(ex)}</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=400, detail=f"Save Annotation node: Gagal membuat folder: {str(ex)}")
+
+            # Write permission test
+            test_file_path = os.path.join(output_dir, ".write_test")
+            try:
+                with open(test_file_path, "w", encoding="utf-8") as f_test:
+                    f_test.write("test")
+                if os.path.exists(test_file_path):
+                    os.remove(test_file_path)
+            except Exception as ex:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = f'<div style="color:#ef4444; font-weight:bold;">[ERROR] Folder tidak dapat ditulis (Write Failed): {str(ex)}</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=400, detail=f"Save Annotation node: Error Gagal Write ke Folder: {str(ex)}")
+
+            # Evaluate inputs
+            img_source = connections_to.get((node_id, "image"))
+            anno_source = connections_to.get((node_id, "annotation"))
+
+            if not img_source or not anno_source:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = '<div style="color:#ef4444; font-weight:bold;">[ERROR] Input Image atau Annotation belum terhubung.</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=400, detail="Save Annotation node: Missing Image or Annotation input connection.")
+
+            src_image_path = evaluate(img_source[0], img_source[1])
+            src_annotations = evaluate(anno_source[0], anno_source[1])
+
+            # If src_annotations is dict (from processed_annotation output pin of overlap_comparator):
+            if isinstance(src_annotations, dict) and "resolved_annotations" in src_annotations:
+                src_annotations = src_annotations["resolved_annotations"]
+
+            # Save Image
+            img_filename = os.path.basename(src_image_path)
+            dest_img_path = os.path.join(images_dir, img_filename)
+            try:
+                shutil.copy2(src_image_path, dest_img_path)
+            except Exception as ex:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = f'<div style="color:#ef4444; font-weight:bold;">[ERROR] Gagal menyalin gambar: {str(ex)}</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=500, detail=f"Save Annotation node: Gagal menyalin gambar: {str(ex)}")
+
+            # Save YOLO Label File
+            img_basename = os.path.splitext(img_filename)[0]
+            label_filename = f"{img_basename}.txt"
+            dest_label_path = os.path.join(labels_dir, label_filename)
+
+            try:
+                with open(dest_label_path, "w", encoding="utf-8") as f_lbl:
+                    for anno in src_annotations:
+                        class_id = anno["class_id"]
+                        coords = anno["coords"]
+                        coords_str = " ".join([f"{c:.6f}" for c in coords])
+                        f_lbl.write(f"{class_id} {coords_str}\n")
+            except Exception as ex:
+                event_queue.put({"type": "end", "node_id": node_id})
+                log_html = f'<div style="color:#ef4444; font-weight:bold;">[ERROR] Gagal menulis file label txt: {str(ex)}</div>'
+                logs[node_id] = log_html
+                event_queue.put({"type": "preview", "node_id": node_id, "preview": None, "logs": log_html})
+                raise HTTPException(status_code=500, detail=f"Save Annotation node: Gagal menulis file label: {str(ex)}")
+
+            log_html = f'''<div style="color:#34d399; font-weight:bold;">[SUCCESS] Berhasil disimpan!</div>
+<div style="font-size:0.7rem; color:var(--text-secondary);">
+• Image: {img_filename}<br/>
+• Labels ({len(src_annotations)} objects): {label_filename}
+</div>'''
+            logs[node_id] = log_html
+
+            with cache_lock:
+                eval_cache[(node_id, "image")] = dest_img_path
+
+            event_queue.put({"type": "end", "node_id": node_id})
+            event_queue.put({
+                "type": "preview",
+                "node_id": node_id,
+                "preview": None,
                 "logs": log_html
             })
-            raise HTTPException(status_code=400, detail="AI Decision Node: [BELUM READY] Evaluasi logika belum diimplementasikan.")
+
+            return dest_img_path
 
         raise HTTPException(status_code=400, detail=f"Cannot evaluate output pin {pin_name} on node {node_id}")
 
     def run_all():
         try:
-            preview_nodes = [n for n in payload.nodes if n["type"] in ("preview", "overlap_comparator")]
+            preview_nodes = [n for n in payload.nodes if n["type"] in ("preview", "overlap_comparator", "save_annotation")]
             if payload.run_only_nodes is not None:
                 preview_nodes = [n for n in preview_nodes if n["id"] in payload.run_only_nodes]
             
@@ -1513,318 +1983,9 @@ def run_flow(payload: RunFlowRequest):
                             event_queue.put({"type": "error", "message": f"Preview node error: {str(ex)}"})
 
                     elif n["type"] == "overlap_comparator":
-                        # Resolve inputs
-                        img_source = connections_to.get((p_node_id, "image"))
-                        class_source = connections_to.get((p_node_id, "class"))
-
-                        if not img_source:
-                            event_queue.put({"type": "error", "message": "Overlap Comparator node is missing connected 'Image' input"})
-                            return
-
                         event_queue.put({"type": "start", "node_id": p_node_id})
-
                         try:
-                            src_image_path = evaluate(img_source[0], img_source[1])
-                            
-                            src_classes = []
-                            if class_source:
-                                src_classes = evaluate(class_source[0], class_source[1])
-
-                            input_pins = n["properties"].get("input_pins", ["image", "class", "annotation1", "annotation2"])
-                            annotation_inputs = []
-                            for pin_name in input_pins:
-                                if pin_name.startswith("annotation"):
-                                    anno_src = connections_to.get((p_node_id, pin_name))
-                                    pin_idx_str = pin_name.replace("annotation", "")
-                                    pin_label = f"Annotation {pin_idx_str}"
-                                    if anno_src:
-                                        annos = evaluate(anno_src[0], anno_src[1])
-                                        annotation_inputs.append((pin_label, annos))
-
-                            img = cv2.imread(src_image_path)
-                            if img is None:
-                                event_queue.put({"type": "end", "node_id": p_node_id})
-                                event_queue.put({"type": "error", "message": f"Failed to load image '{src_image_path}' for Overlap Comparator rendering"})
-                                return
-                            
-                            h, w = img.shape[:2]
-                            preview_items = []
-
-                            # --- 1. RAW SECTION ---
-                            for pin_label, annos in annotation_inputs:
-                                raw_annotated = img.copy()
-                                for anno in annos:
-                                    class_id = anno["class_id"]
-                                    coords = anno["coords"]
-                                    is_segment = anno.get("is_segment", len(coords) > 4)
-                                    
-                                    target_name = f"Class {class_id}"
-                                    target_color = "#10b981"
-                                    if class_id < len(src_classes):
-                                        target_name = src_classes[class_id]["name"]
-                                        target_color = src_classes[class_id]["color"]
-                                    bgr = hex_to_bgr(target_color)
-
-                                    lbl_x, lbl_y = 0, 0
-                                    if is_segment:
-                                        pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                                        if len(pts_px) >= 3:
-                                            overlay = raw_annotated.copy()
-                                            cv2.fillPoly(overlay, [pts_px], bgr)
-                                            cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
-                                            cv2.polylines(raw_annotated, [pts_px], True, bgr, 2)
-                                            min_y_idx = np.argmin(pts_px[:, 1])
-                                            lbl_x, lbl_y = int(pts_px[min_y_idx][0]), int(pts_px[min_y_idx][1])
-                                    else:
-                                        if len(coords) >= 4:
-                                            xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
-                                            x1 = int((xc - bw/2) * w)
-                                            y1 = int((yc - bh/2) * h)
-                                            x2 = int((xc + bw/2) * w)
-                                            y2 = int((yc + bh/2) * h)
-                                            overlay = raw_annotated.copy()
-                                            cv2.rectangle(overlay, (x1, y1), (x2, y2), bgr, -1)
-                                            cv2.addWeighted(overlay, 0.3, raw_annotated, 0.7, 0, raw_annotated)
-                                            cv2.rectangle(raw_annotated, (x1, y1), (x2, y2), bgr, 2)
-                                            lbl_x, lbl_y = x1, y1
-
-                                    if class_source:
-                                        conf = anno.get("confidence")
-                                        lbl_txt = target_name
-                                        if conf is not None:
-                                            lbl_txt += f" {conf:.2f}"
-                                        (tw, th), baseline = cv2.getTextSize(lbl_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                                        cv2.rectangle(raw_annotated, (lbl_x, lbl_y - th - 5), (lbl_x + tw + 6, lbl_y + baseline), bgr, -1)
-                                        cv2.putText(raw_annotated, lbl_txt, (lbl_x + 3, lbl_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
-                                
-                                _, raw_buf = cv2.imencode(".jpg", raw_annotated)
-                                raw_b64 = base64.b64encode(raw_buf).decode("utf-8")
-                                preview_items.append({
-                                    "label": f"RAW: {pin_label}",
-                                    "image": raw_b64,
-                                    "category": "raw"
-                                })
-
-                            # --- 2. COMPARE ALL PAIRS ACROSS DIFFERENT SOURCES ---
-                            threshold = float(n["properties"].get("iou_threshold", 0.5))
-
-                            def get_detection_bbox_and_segment_crops(anno, color_hex):
-                                coords = anno["coords"]
-                                is_segment = anno.get("is_segment", len(coords) > 4)
-                                if is_segment:
-                                    xs = coords[0::2]
-                                    ys = coords[1::2]
-                                    cx1, cy1 = int(min(xs)*w), int(min(ys)*h)
-                                    cx2, cy2 = int(max(xs)*w), int(max(ys)*h)
-                                else:
-                                    if len(coords) >= 4:
-                                        xc, yc, bw, bh = coords[0], coords[1], coords[2], coords[3]
-                                        cx1 = int((xc - bw/2)*w)
-                                        cy1 = int((yc - bh/2)*h)
-                                        cx2 = int((xc + bw/2)*w)
-                                        cy2 = int((yc + bh/2)*h)
-                                    else:
-                                        return None, None
-                                
-                                cx1 = max(0, min(cx1, w - 1))
-                                cx2 = max(0, min(cx2, w - 1))
-                                cy1 = max(0, min(cy1, h - 1))
-                                cy2 = max(0, min(cy2, h - 1))
-                                
-                                cw = cx2 - cx1
-                                ch = cy2 - cy1
-                                if cw <= 0 or ch <= 0:
-                                    return None, None
-                                
-                                bgr = hex_to_bgr(color_hex)
-                                left_crop = img[cy1:cy2, cx1:cx2].copy()
-                                if is_segment:
-                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                                    pts_offset = pts_px - [cx1, cy1]
-                                    if len(pts_offset) >= 3:
-                                        overlay_crop = left_crop.copy()
-                                        cv2.fillPoly(overlay_crop, [pts_offset], bgr)
-                                        cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
-                                        cv2.polylines(left_crop, [pts_offset], True, bgr, 2)
-                                else:
-                                    overlay_crop = left_crop.copy()
-                                    cv2.rectangle(overlay_crop, (0, 0), (cw, ch), bgr, -1)
-                                    cv2.addWeighted(overlay_crop, 0.3, left_crop, 0.7, 0, left_crop)
-                                    cv2.rectangle(left_crop, (0, 0), (cw, ch), bgr, 2)
-                                    
-                                mask = np.zeros((h, w), dtype=np.uint8)
-                                if is_segment:
-                                    pts_px = np.array([[int(coords[i]*w), int(coords[i+1]*h)] for i in range(0, len(coords), 2)], dtype=np.int32)
-                                    if len(pts_px) >= 3:
-                                        cv2.fillPoly(mask, [pts_px], 255)
-                                else:
-                                    cv2.rectangle(mask, (cx1, cy1), (cx2, cy2), 255, -1)
-                                    
-                                masked_img = cv2.bitwise_and(img, img, mask=mask)
-                                right_crop = masked_img[cy1:cy2, cx1:cx2].copy()
-                                return left_crop, right_crop
-                            
-                            # Collect all detections into a single flat list
-                            all_detections = []
-                            for src_idx, (pin_label, annos) in enumerate(annotation_inputs):
-                                for anno in annos:
-                                    all_detections.append({
-                                        "src_idx": src_idx,
-                                        "pin_label": pin_label,
-                                        "anno": anno,
-                                        "global_idx": len(all_detections)
-                                    })
-                                    
-                            # Build adjacency list of overlaps based on IoU threshold
-                            num_dets = len(all_detections)
-                            adj = [[] for _ in range(num_dets)]
-                            for i in range(num_dets):
-                                for j in range(i + 1, num_dets):
-                                    iou = calculate_iou(all_detections[i]["anno"], all_detections[j]["anno"], h, w)
-                                    if iou >= threshold:
-                                        adj[i].append(j)
-                                        adj[j].append(i)
-                                        
-                            # Find overlap clusters using BFS/Connected Components
-                            visited = set()
-                            clusters = []
-                            for i in range(num_dets):
-                                if i not in visited:
-                                    comp = []
-                                    queue = [i]
-                                    visited.add(i)
-                                    while queue:
-                                        curr = queue.pop(0)
-                                        comp.append(all_detections[curr])
-                                        for neighbor in adj[curr]:
-                                            if neighbor not in visited:
-                                                visited.add(neighbor)
-                                                queue.append(neighbor)
-                                    clusters.append(comp)
-                                    
-                            # Classify clusters into overlaps or non-overlaps
-                            overlap_clusters = []
-                            not_overlap_detections = []
-                            for comp in clusters:
-                                sources_in_comp = set(det["src_idx"] for det in comp)
-                                if len(comp) > 1 and len(sources_in_comp) > 1:
-                                    comp.sort(key=lambda d: (d["src_idx"], d["anno"]["class_id"]))
-                                    overlap_clusters.append(comp)
-                                else:
-                                    for det in comp:
-                                        not_overlap_detections.append(det)
-                                        
-                            # Render overlap cluster panels
-                            for comp in overlap_clusters:
-                                for det in comp:
-                                    c_id = det["anno"]["class_id"]
-                                    det["class_name"] = src_classes[c_id]["name"] if c_id < len(src_classes) else f"Class {c_id}"
-                                    det["color"] = src_classes[c_id]["color"] if c_id < len(src_classes) else "#10b981"
-                                    
-                                # Create cross-referenced IoU labels
-                                label_parts = []
-                                for idx_i, det_i in enumerate(comp):
-                                    part = f"{det_i['pin_label']} ({det_i['class_name']})"
-                                    ious = []
-                                    for idx_j, det_j in enumerate(comp):
-                                        if idx_i == idx_j:
-                                            continue
-                                        val = calculate_iou(det_i["anno"], det_j["anno"], h, w)
-                                        ious.append(f"{val*100:.0f}% w/ P{idx_j+1}")
-                                    if ious:
-                                        part += f" [{', '.join(ious)}]"
-                                    label_parts.append(part)
-                                label_text = "Overlap: " + " | ".join(label_parts)
-                                
-                                # Render bbox and segment crops side-by-side
-                                crops_bbox = []
-                                crops_seg = []
-                                for det in comp:
-                                    crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], det["color"])
-                                    crops_bbox.append(crop_bbox)
-                                    crops_seg.append(crop_seg)
-                                    
-                                valid_indices = [idx for idx, c in enumerate(crops_bbox) if c is not None]
-                                if valid_indices:
-                                    max_h = max(crops_bbox[idx].shape[0] for idx in valid_indices)
-                                    padded_bbox = []
-                                    padded_seg = []
-                                    widths = []
-                                    for idx in valid_indices:
-                                        c_bbox = crops_bbox[idx]
-                                        c_seg = crops_seg[idx]
-                                        h_c, w_c = c_bbox.shape[:2]
-                                        widths.append(w_c)
-                                        
-                                        pad_b = np.zeros((max_h, w_c, 3), dtype=np.uint8)
-                                        pad_b[0:h_c, 0:w_c] = c_bbox
-                                        padded_bbox.append(pad_b)
-                                        
-                                        pad_s = np.zeros((max_h, w_c, 3), dtype=np.uint8)
-                                        pad_s[0:h_c, 0:w_c] = c_seg
-                                        padded_seg.append(pad_s)
-                                        
-                                    bbox_row = np.hstack(padded_bbox)
-                                    seg_row = np.hstack(padded_seg)
-                                    
-                                    # Draw dividers between panels
-                                    curr_x = 0
-                                    for w_c in widths[:-1]:
-                                        curr_x += w_c
-                                        cv2.line(bbox_row, (curr_x, 0), (curr_x, max_h), (80, 80, 80), 2)
-                                        cv2.line(seg_row, (curr_x, 0), (curr_x, max_h), (80, 80, 80), 2)
-                                        
-                                    _, ob_buf = cv2.imencode(".jpg", bbox_row)
-                                    ob_b64 = base64.b64encode(ob_buf).decode("utf-8")
-                                    
-                                    _, os_buf = cv2.imencode(".jpg", seg_row)
-                                    os_b64 = base64.b64encode(os_buf).decode("utf-8")
-                                    
-                                    preview_items.append({
-                                        "label": label_text,
-                                        "image": ob_b64,
-                                        "category": "overlap"
-                                    })
-                                    preview_items.append({
-                                        "label": "",
-                                        "image": os_b64,
-                                        "category": "overlap"
-                                    })
-
-                            # --- 3. NOT OVERLAP SECTION ---
-                            for det in not_overlap_detections:
-                                c_id = det["anno"]["class_id"]
-                                color = "#10b981"
-                                class_name = f"Class {c_id}"
-                                if c_id < len(src_classes):
-                                    color = src_classes[c_id]["color"]
-                                    class_name = src_classes[c_id]["name"]
-                                    
-                                crop_bbox, crop_seg = get_detection_bbox_and_segment_crops(det["anno"], color)
-                                if crop_bbox is not None and crop_seg is not None:
-                                    row_img = np.hstack([crop_bbox, crop_seg])
-                                    h_row, w_row = row_img.shape[:2]
-                                    cv2.line(row_img, (w_row // 2, 0), (w_row // 2, h_row), (80, 80, 80), 2)
-                                    
-                                    _, no_buf = cv2.imencode(".jpg", row_img)
-                                    no_b64 = base64.b64encode(no_buf).decode("utf-8")
-                                    
-                                    preview_items.append({
-                                        "label": f"Not Overlap: From {det['pin_label']} ({class_name}) (BBox | Segment)",
-                                        "image": no_b64,
-                                        "category": "not_overlap"
-                                    })
-
-                            with cache_lock:
-                                previews[p_node_id] = preview_items
-
-                            event_queue.put({"type": "end", "node_id": p_node_id})
-                            event_queue.put({
-                                "type": "preview",
-                                "node_id": p_node_id,
-                                "preview": previews[p_node_id],
-                                "logs": ""
-                            })
+                            evaluate(p_node_id, "processed_annotation")
                         except Exception as ex:
                             event_queue.put({"type": "end", "node_id": p_node_id})
                             event_queue.put({"type": "error", "message": f"Overlap Comparator node error: {str(ex)}"})
