@@ -186,6 +186,15 @@ def read_root():
         pass
     return FileResponse(os.path.join(BASE_DIR, "annodes.html"))
 
+@app.get("/nodes/{file_path:path}")
+def serve_node_modules(file_path: str):
+    """Serve JS files from the nodes/ subdirectory."""
+    safe_path = os.path.normpath(file_path).lstrip(os.sep)
+    full_path = os.path.join(BASE_DIR, "nodes", safe_path)
+    if os.path.exists(full_path) and os.path.isfile(full_path):
+        return FileResponse(full_path)
+    raise HTTPException(status_code=404, detail=f"Node module not found: {file_path}")
+
 @app.get("/{flow_id}")
 def read_flow_tab(flow_id: str):
     if flow_id.isdigit():
